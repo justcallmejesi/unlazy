@@ -5,3 +5,5 @@
 .claude/settings.json.unlazy.bak
 *.tmp
 node_modules/
+telegram-bot/.env
+telegram-bot/.data/

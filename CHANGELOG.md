@@ -4,6 +4,13 @@
 
 This section describes the current source tree. It does not claim that `2.1.0` has a Git tag or GitHub Release.
 
+### Telegram screening bot
+
+- Add `telegram-bot/`, a zero-dependency Telegram bot that administers GAD-7 and PHQ-9, keeps every result in memory with an atomic JSON snapshot, and sends a weekly Wednesday reminder. Score both instruments by their published bands, ask the PHQ-9 impairment item without adding it to the total, and open a support block whenever PHQ-9 item 9 is above zero.
+- Route updates through a synchronous handler that returns Bot API calls instead of performing input or output, so every conversational branch is covered by tests without a network or a live bot.
+- Resolve the weekly slot from fixed UTC offsets with per-user time and time zone, mark the slot rather than the send time so a restart cannot double-send, skip a slot older than the grace window instead of firing it late, and disable reminders for a chat that answers `403`.
+- Keep the bot token out of logs and error messages, refuse questionnaires in group chats, store the snapshot with owner-only permissions, and support `/export` and `/delete` for the caller's own data.
+
 ### Gate authoring
 
 - Add `scripts/gate-lint.mjs`, a non-executing advisory audit of ledger quality. Warn on whole fixed-output commands, weak success vocabulary, shared-parser path ambiguity, activity titles, unmeasured manual numbers, and mostly manual ledgers without pretending to shell-parse chains or argv. Default warnings retain a `LINT OK` marker and exit `0`; `--strict` makes them fail. Reject unknown short and long options, bound ledger reads, refuse linked or special-file inputs, escape terminal, line-separator, and bidirectional controls, and cap fields plus reported finding count so escaping cannot amplify output without bound.
