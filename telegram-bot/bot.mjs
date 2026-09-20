@@ -160,6 +160,7 @@ export function buildBot(config) {
   const store = new Store({
     file: config.dataFile,
     onError: (error) => logError("snapshot write failed: " + String(error && error.message)),
+    onWarning: (message) => logError("storage warning: " + message),
   });
   const sessions = new SessionManager({ idleTimeoutMs: config.sessionIdleTimeoutMs });
   const router = createRouter({ store, sessions, config });

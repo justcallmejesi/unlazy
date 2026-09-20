@@ -6,12 +6,21 @@
 // written atomically (temporary file, fsync, rename) so a crash mid-write
 // cannot truncate an existing snapshot.
 
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import {
+  closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync,
+} from "node:fs";
 import { dirname, resolve } from "node:path";
 
 export const MAX_RESULTS_PER_USER = 200;
 const SNAPSHOT_VERSION = 1;
-const MAX_SNAPSHOT_BYTES = 32 * 1024 * 1024;
+// One ceiling for both directions. The writer must never be able to produce a
+// snapshot the reader refuses, so `flush` checks the same number before the
+// rename and reports what to do instead of leaving an unloadable file behind.
+export const MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024;
+// A snapshot is serialized and written whole, so past this size the flush
+// starts to block the event loop long enough to be noticed. Measured on the
+// reference machine: about 500ms per 40MB.
+export const SNAPSHOT_WARN_BYTES = 24 * 1024 * 1024;
 
 function defaultUser(chatId) {
   return {
@@ -51,11 +60,32 @@ export class Store {
     this.offset = 0;
     this.dirty = false;
     this.timer = null;
+    // Both limits are injectable so the ceiling behaviour is testable without
+    // materializing a quarter of a gigabyte.
+    this.maxSnapshotBytes = options.maxSnapshotBytes === undefined
+      ? MAX_SNAPSHOT_BYTES
+      : Number(options.maxSnapshotBytes);
+    this.warnSnapshotBytes = options.warnSnapshotBytes === undefined
+      ? SNAPSHOT_WARN_BYTES
+      : Number(options.warnSnapshotBytes);
+    this.warnedAboutSize = false;
     this.onError = typeof options.onError === "function" ? options.onError : () => {};
+    this.onWarning = typeof options.onWarning === "function" ? options.onWarning : () => {};
   }
 
   load() {
     if (!this.file) return { loaded: false, reason: "memory-only" };
+    // Size is checked on the file, not on a string already in memory, so an
+    // oversized snapshot is refused without being read first.
+    try {
+      const size = statSync(this.file).size;
+      if (size > this.maxSnapshotBytes) {
+        throw new Error("snapshot is " + size + " bytes, over the " + this.maxSnapshotBytes + " byte ceiling");
+      }
+    } catch (error) {
+      if (error && error.code === "ENOENT") return { loaded: false, reason: "no snapshot yet" };
+      throw error;
+    }
     let text = null;
     try {
       text = readFileSync(this.file, "utf8");
@@ -63,7 +93,6 @@ export class Store {
       if (error && error.code === "ENOENT") return { loaded: false, reason: "no snapshot yet" };
       throw error;
     }
-    if (text.length > MAX_SNAPSHOT_BYTES) throw new Error("snapshot exceeds " + MAX_SNAPSHOT_BYTES + " bytes");
     const parsed = JSON.parse(text);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error("snapshot root must be an object");
@@ -169,7 +198,20 @@ export class Store {
       this.timer = null;
     }
     if (!this.file || !this.dirty) return false;
-    const body = JSON.stringify(this.snapshot(), null, 2) + "\n";
+    // Compact rather than indented: the snapshot is written and read by this
+    // process only, and indentation costs slightly over twice the bytes and
+    // serialization time. `/export` still shows the user indented JSON.
+    const body = JSON.stringify(this.snapshot()) + "\n";
+    const size = Buffer.byteLength(body, "utf8");
+    if (size > this.maxSnapshotBytes) {
+      throw new Error("snapshot would be " + size + " bytes, over the " + this.maxSnapshotBytes +
+        " byte ceiling. Lower MAX_RESULTS_PER_USER or move storage to a database.");
+    }
+    if (size > this.warnSnapshotBytes && !this.warnedAboutSize) {
+      this.warnedAboutSize = true;
+      this.onWarning("snapshot has reached " + Math.round(size / 1024 / 1024) + " MB: each flush now " +
+        "serializes the whole file and blocks the event loop. Consider a database.");
+    }
     mkdirSync(dirname(this.file), { recursive: true });
     const temporary = this.file + ".tmp-" + process.pid;
     let fd = null;

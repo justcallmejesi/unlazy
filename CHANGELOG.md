@@ -10,6 +10,7 @@ This section describes the current source tree. It does not claim that `2.1.0` h
 - Route updates through a synchronous handler that returns Bot API calls instead of performing input or output, so every conversational branch is covered by tests without a network or a live bot.
 - Resolve the weekly slot from fixed UTC offsets with per-user time and time zone, mark the slot rather than the send time so a restart cannot double-send, skip a slot older than the grace window instead of firing it late, and disable reminders for a chat that answers `403`.
 - Keep the bot token out of logs and error messages, refuse questionnaires in group chats, store the snapshot with owner-only permissions, and support `/export` and `/delete` for the caller's own data.
+- Bound the snapshot with one ceiling in both directions. The writer refused nothing while the reader rejected anything over 32 MB, so a bot with a few thousand users wrote a snapshot it could no longer load on restart. `flush` now checks the same limit before the rename, leaves the previous snapshot and no temporary file behind when it refuses, warns once when the file grows past the point where serialization blocks the event loop, and writes compact rather than indented JSON for slightly under half the bytes and time.
 
 ### Gate authoring
 

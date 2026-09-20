@@ -9,7 +9,7 @@
 
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -184,7 +184,43 @@ test("store: snapshot round-trips users, results, settings, and the update offse
   assert.equal(user.tzOffsetMinutes, -300);
   assert.equal(user.results.length, 1);
   assert.equal(user.results[0].score, 10);
-  assert.match(readFileSync(file, "utf8"), /"version": 1/);
+  assert.match(readFileSync(file, "utf8"), /^\{"version":1,/, "the snapshot is written compact");
+});
+
+test("store: the writer can never produce a snapshot the reader refuses", () => {
+  const file = join(DIR, "ceiling.json");
+  const seed = new Store({ file, writeDelayMs: 1e9 });
+  seed.addResult(1, buildResult(GAD7, [1, 1, 1, 1, 1, 1, 1], WED_NOON_UTC));
+  assert.equal(seed.flush(), true);
+  const good = readFileSync(file, "utf8");
+
+  // Same file, same ceiling: whatever the writer refuses, the reader refuses.
+  const tight = new Store({ file, writeDelayMs: 1e9, maxSnapshotBytes: 64 });
+  tight.addResult(2, buildResult(PHQ9, [1, 1, 1, 1, 1, 1, 1, 1, 0, 1], WED_NOON_UTC));
+  assert.throws(() => tight.flush(), /over the 64 byte ceiling/);
+  assert.throws(() => tight.flush(), /move storage to a database/);
+  assert.equal(readFileSync(file, "utf8"), good, "a refused flush leaves the last good snapshot intact");
+  assert.deepEqual(readdirSync(DIR).filter((name) => name.startsWith("ceiling.json.tmp")), [],
+    "a refused flush leaves no temporary file behind");
+  assert.throws(() => new Store({ file, maxSnapshotBytes: 64 }).load(), /over the 64 byte ceiling/);
+  assert.equal(new Store({ file }).load().loaded, true, "the same file loads under the real ceiling");
+});
+
+test("store: crossing the soft size threshold warns once, not every flush", () => {
+  const file = join(DIR, "warn.json");
+  const warnings = [];
+  const store = new Store({
+    file,
+    writeDelayMs: 1e9,
+    warnSnapshotBytes: 64,
+    onWarning: (message) => warnings.push(message),
+  });
+  store.addResult(1, buildResult(GAD7, [1, 1, 1, 1, 1, 1, 1], WED_NOON_UTC));
+  assert.equal(store.flush(), true);
+  store.addResult(1, buildResult(GAD7, [2, 2, 2, 2, 2, 2, 2], WED_NOON_UTC));
+  assert.equal(store.flush(), true);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /blocks the event loop/);
 });
 
 test("store: a malformed snapshot user is normalized instead of trusted", () => {
