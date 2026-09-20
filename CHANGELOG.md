@@ -6,6 +6,9 @@ This section describes the current source tree. It does not claim that `2.1.0` h
 
 ### Telegram screening bot
 
+- Localize the bot for Ukraine. All user-facing text is Ukrainian: questionnaire items, answer options, severity bands, every command reply, and the reminder. The support block now lists Ukrainian services (103 and 112, LifeLine Ukraine 7333, the national children's line 116 111, howareu.com) with each number verified against the operator's own page and cited in the bot README. The default reminder offset documents Kyiv time as UTC+2 in winter and UTC+3 in summer.
+- Record repository-wide owner context in `CLAUDE.md`, including the Ukrainian locale defaults and the files that carry locale-bearing values.
+
 - Add `telegram-bot/`, a zero-dependency Telegram bot that administers GAD-7 and PHQ-9, keeps every result in memory with an atomic JSON snapshot, and sends a weekly Wednesday reminder. Score both instruments by their published bands, ask the PHQ-9 impairment item without adding it to the total, and open a support block whenever PHQ-9 item 9 is above zero.
 - Route updates through a synchronous handler that returns Bot API calls instead of performing input or output, so every conversational branch is covered by tests without a network or a live bot.
 - Resolve the weekly slot from fixed UTC offsets with per-user time and time zone, mark the slot rather than the send time so a restart cannot double-send, skip a slot older than the grace window instead of firing it late, and disable reminders for a chat that answers `403`.

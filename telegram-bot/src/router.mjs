@@ -1,4 +1,4 @@
-// Update routing. Zero dependencies. Node 16+.
+// Update routing. User-facing text is Ukrainian. Zero dependencies. Node 16+.
 //
 // `handleUpdate` is synchronous and performs no input or output: it reads and
 // mutates the in-memory store and returns the Bot API calls to make. That keeps
@@ -16,8 +16,8 @@ import {
 
 const HTML = { parse_mode: "HTML" };
 const PRIVATE_ONLY =
-  "Опросники доступны только в личном чате с ботом: ответы о самочувствии не стоит публиковать в группе. " +
-  "Напишите мне в личные сообщения.";
+  "Опитувальники доступні лише в особистому чаті з ботом: відповіді про самопочуття не варто публікувати в групі. " +
+  "Напишіть мені в особисті повідомлення.";
 
 function send(chatId, text, extra = {}) {
   return { method: "sendMessage", payload: Object.assign({ chat_id: chatId, text }, HTML, extra) };
@@ -80,7 +80,7 @@ export function createRouter(context) {
     const session = sessions.start(chatId, instrument, now());
     return [
       send(chatId, "<b>" + escapeHtml(instrument.title) + "</b>, " + escapeHtml(instrument.subtitle) +
-        ". Вопросов: " + session.total + ". Прервать: /cancel"),
+        ". Питань: " + session.total + ". Перервати: /cancel"),
       askCurrent(chatId, instrument, session),
     ];
   }
@@ -99,17 +99,17 @@ export function createRouter(context) {
   // Records one answer and returns the follow-up messages.
   function applyAnswer(chatId, value, expect) {
     const active = sessions.get(chatId, now());
-    if (!active) return { actions: [send(chatId, "Активного опросника нет. Запустите /gad7 или /phq9.")], stale: true };
+    if (!active) return { actions: [send(chatId, "Активного опитувальника немає. Запустіть /gad7 або /phq9.")], stale: true };
     const instrument = getInstrument(active.instrumentId);
     if (!instrument) {
       sessions.cancel(chatId);
-      return { actions: [send(chatId, "Опросник больше не поддерживается. Запустите /gad7 или /phq9.")], stale: true };
+      return { actions: [send(chatId, "Опитувальник більше не підтримується. Запустіть /gad7 або /phq9.")], stale: true };
     }
     const item = instrument.items[active.index];
     const option = item.options.find((candidate) => candidate.value === Number(value));
     if (!option) {
       return {
-        actions: [send(chatId, "Выберите один из вариантов от 0 до " + (item.options.length - 1) + ".")],
+        actions: [send(chatId, "Виберіть один із варіантів від 0 до " + (item.options.length - 1) + ".")],
         stale: true,
       };
     }
@@ -123,20 +123,20 @@ export function createRouter(context) {
 
   function handleRemind(chatId, args) {
     const value = args.toLowerCase();
-    if (value === "on" || value === "вкл") {
+    if (value === "on" || value === "увімк") {
       store.updateUser(chatId, { remindersEnabled: true });
-      return [send(chatId, "Напоминания включены.\n\n" + reminderLine(chatId))];
+      return [send(chatId, "Нагадування увімкнені.\n\n" + reminderLine(chatId))];
     }
-    if (value === "off" || value === "выкл") {
+    if (value === "off" || value === "вимк") {
       store.updateUser(chatId, { remindersEnabled: false });
-      return [send(chatId, "Напоминания выключены. Вернуть: /remind on")];
+      return [send(chatId, "Нагадування вимкнені. Повернути: /remind on")];
     }
     if (value) {
       const time = parseTimeOfDay(value);
-      if (!time) return [send(chatId, "Время нужно в формате ЧЧ:ММ, например /remind 09:30.")];
+      if (!time) return [send(chatId, "Час потрібен у форматі ГГ:ХХ, наприклад /remind 09:30.")];
       // Stored in normal form so the snapshot never holds "9:05".
       store.updateUser(chatId, { reminderTime: formatTimeOfDay(time), remindersEnabled: true });
-      return [send(chatId, "Буду напоминать по средам.\n\n" + reminderLine(chatId))];
+      return [send(chatId, "Нагадуватиму щосереди.\n\n" + reminderLine(chatId))];
     }
     return [send(chatId, reminderLine(chatId))];
   }
@@ -144,13 +144,13 @@ export function createRouter(context) {
   function handleTimezone(chatId, args) {
     if (!args) {
       const schedule = resolveSchedule(store.user(chatId), config.reminder);
-      return [send(chatId, "Текущий часовой пояс: " + formatUtcOffset(schedule.offsetMinutes) +
-        "\nИзменить: /tz +3 или /tz -05:30")];
+      return [send(chatId, "Поточний часовий пояс: " + formatUtcOffset(schedule.offsetMinutes) +
+        "\nЗмінити: /tz +3 або /tz -05:30")];
     }
     const offsetMinutes = parseUtcOffset(args);
-    if (offsetMinutes === null) return [send(chatId, "Не понял смещение. Примеры: /tz +3, /tz -05:30, /tz 0.")];
+    if (offsetMinutes === null) return [send(chatId, "Не зрозумів зсув. Приклади: /tz +3, /tz -05:30, /tz 0.")];
     store.updateUser(chatId, { tzOffsetMinutes: offsetMinutes });
-    return [send(chatId, "Часовой пояс сохранён.\n\n" + reminderLine(chatId))];
+    return [send(chatId, "Часовий пояс збережено.\n\n" + reminderLine(chatId))];
   }
 
   function handleCommand(chatId, parsed, message) {
@@ -174,8 +174,8 @@ export function createRouter(context) {
         return startInstrument(chatId, getInstrument(command));
       case "cancel":
         return sessions.cancel(chatId)
-          ? [send(chatId, "Опросник прерван. Ответы не сохранены.")]
-          : [send(chatId, "Нечего прерывать.")];
+          ? [send(chatId, "Опитувальник перервано. Відповіді не збережені.")]
+          : [send(chatId, "Немає чого перервати.")];
       case "results":
         return [send(chatId, historyMessage(store, chatId, offsetFor(chatId)), { reply_markup: startKeyboard() })];
       case "last":
@@ -195,11 +195,11 @@ export function createRouter(context) {
         }))];
       }
       case "delete":
-        return [send(chatId, "Удалить все сохранённые результаты и настройки? Действие необратимо.", {
+        return [send(chatId, "Видалити всі збережені результати та налаштування? Дію не можна скасувати.", {
           reply_markup: {
             inline_keyboard: [[
-              { text: "Да, удалить", callback_data: "del|yes" },
-              { text: "Отмена", callback_data: "del|no" },
+              { text: "Так, видалити", callback_data: "del|yes" },
+              { text: "Скасувати", callback_data: "del|no" },
             ]],
           },
         })];
@@ -242,13 +242,13 @@ export function createRouter(context) {
       const askedIndex = answer.itemIndex;
       const outcome = applyAnswer(chatId, answer.value, answer);
       if (outcome.stale) {
-        const note = outcome.reason === "stale" ? "Этот вопрос уже отвечен." : undefined;
+        const note = outcome.reason === "stale" ? "На це питання вже відповіли." : undefined;
         return [ack(query.id, note)].concat(outcome.actions);
       }
       const chosen = outcome.option ? escapeHtml(outcome.option.label) : "";
       const replay = instrument && message.message_id
         ? [editText(chatId, message.message_id,
-          questionText(instrument, askedIndex, active.total) + "\n\nОтвет: <b>" + chosen + "</b>")]
+          questionText(instrument, askedIndex, active.total) + "\n\nВідповідь: <b>" + chosen + "</b>")]
         : [];
       return [ack(query.id)].concat(replay, outcome.actions);
     }
@@ -256,7 +256,7 @@ export function createRouter(context) {
     const parts = data.split("|");
     if (parts[0] === "s") {
       const instrument = getInstrument(parts[1]);
-      if (!instrument) return [ack(query.id, "Неизвестный опросник")];
+      if (!instrument) return [ack(query.id, "Невідомий опитувальник")];
       if (sessions.get(chatId, now())) sessions.cancel(chatId);
       return [ack(query.id)].concat(startInstrument(chatId, instrument));
     }
@@ -272,9 +272,9 @@ export function createRouter(context) {
       if (parts[1] === "yes") {
         sessions.cancel(chatId);
         store.forget(chatId);
-        return [ack(query.id, "Удалено"), send(chatId, "Все данные удалены. /start начинает заново.")];
+        return [ack(query.id, "Видалено"), send(chatId, "Усі дані видалено. /start починає заново.")];
       }
-      return [ack(query.id), send(chatId, "Удаление отменено.")];
+      return [ack(query.id), send(chatId, "Видалення скасовано.")];
     }
     return [ack(query.id)];
   }

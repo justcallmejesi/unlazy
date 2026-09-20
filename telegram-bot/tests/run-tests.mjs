@@ -101,12 +101,12 @@ test("instruments: PHQ-9 scores nine items and asks an unscored tenth", () => {
 });
 
 test("instruments: severity bands match the published boundaries", () => {
-  const gad = [[0, "минимальная"], [4, "минимальная"], [5, "легкая"], [9, "легкая"],
-    [10, "умеренная"], [14, "умеренная"], [15, "выраженная"], [21, "выраженная"]];
+  const gad = [[0, "мінімальна"], [4, "мінімальна"], [5, "легка"], [9, "легка"],
+    [10, "помірна"], [14, "помірна"], [15, "виражена"], [21, "виражена"]];
   gad.forEach(([score, expected]) => assert.match(severityOf(GAD7, score), new RegExp(expected)));
-  const phq = [[0, "минимальная"], [4, "минимальная"], [5, "легкая"], [9, "легкая"],
-    [10, "умеренная выраженность"], [14, "умеренная выраженность"], [15, "умеренно тяжелая"],
-    [19, "умеренно тяжелая"], [20, "тяжелая"], [27, "тяжелая"]];
+  const phq = [[0, "мінімальні"], [4, "мінімальні"], [5, "легкі"], [9, "легкі"],
+    [10, "помірні прояви"], [14, "помірні прояви"], [15, "помірно тяжкі"],
+    [19, "помірно тяжкі"], [20, "тяжкі"], [27, "тяжкі"]];
   phq.forEach(([score, expected]) => assert.match(severityOf(PHQ9, score), new RegExp(expected)));
 });
 
@@ -127,7 +127,7 @@ test("instruments: buildResult records score, band, cutoff, risk, and impairment
   assert.equal(result.instrument, "phq9");
   assert.equal(result.score, 17);
   assert.equal(result.maxScore, 27);
-  assert.match(result.severity, /умеренно тяжелая/);
+  assert.match(result.severity, /помірно тяжкі/);
   assert.equal(result.aboveCutoff, true);
   assert.equal(result.risk, true);
   assert.equal(result.impairment, 2);
@@ -282,7 +282,7 @@ test("store: a stored result with derived fields missing still renders", () => {
   store.load();
   assert.deepEqual(store.history(13).map((entry) => entry.instrument), ["gad7"]);
   const text = historyMessage(store, 13, 180);
-  assert.match(text, /<b>12<\/b>\/21 умеренная тревога/);
+  assert.match(text, /<b>12<\/b>\/21 помірна тривога/);
   assert.doesNotMatch(text, /undefined/);
   assert.doesNotMatch(lastMessage(store, 13, 180), /undefined/);
 });
@@ -436,7 +436,7 @@ test("reminder: time and offset parsing accepts real input and rejects nonsense"
   assert.equal(formatUtcOffset(-330), "UTC-05:30");
   assert.equal(formatUtcOffset(0), "UTC+00:00");
   assert.equal(formatLocalDateTime(Date.parse("2026-09-16T21:30:00Z"), 180), "17.09.2026 00:30");
-  assert.equal(formatLocalDateTime(Date.parse("not a date"), 180), "дата неизвестна");
+  assert.equal(formatLocalDateTime(Date.parse("not a date"), 180), "дата невідома");
 });
 
 // --------------------------------------------------------------- router
@@ -460,7 +460,7 @@ test("router: /start greets, registers the user, and offers both instruments", (
   assert.match(text, /Тест/);
   assert.match(text, /GAD-7/);
   assert.match(text, /PHQ-9/);
-  assert.match(text, /не диагноз/);
+  assert.match(text, /не діагноз/);
   assert.equal(actions[0].payload.parse_mode, "HTML");
   const buttons = actions[0].payload.reply_markup.inline_keyboard;
   assert.deepEqual(buttons[0].map((button) => button.callback_data), ["s|gad7", "s|phq9"]);
@@ -471,9 +471,9 @@ test("router: a full GAD-7 run through the keyboard scores and stores the result
   const h = harness();
   const finished = completeViaKeyboard(h, GAD7, [1, 2, 1, 2, 1, 2, 1]);
   const text = lastText(finished);
-  assert.match(text, /Баллы: <b>10<\/b> из 21/);
-  assert.match(text, /умеренная тревога/);
-  assert.match(text, /выше порога 10/);
+  assert.match(text, /Бали: <b>10<\/b> з 21/);
+  assert.match(text, /помірна тривога/);
+  assert.match(text, /вище порогу 10/);
   const stored = h.store.lastResult(777, "gad7");
   assert.equal(stored.score, 10);
   assert.deepEqual(stored.answers, [1, 2, 1, 2, 1, 2, 1]);
@@ -482,7 +482,7 @@ test("router: a full GAD-7 run through the keyboard scores and stores the result
   const edit = finished.find((action) => action.method === "editMessageText");
   assert.ok(edit, "the answered question is edited in place");
   assert.deepEqual(edit.payload.reply_markup, { inline_keyboard: [] });
-  assert.match(edit.payload.text, /Ответ: <b>/);
+  assert.match(edit.payload.text, /Відповідь: <b>/);
 });
 
 test("router: every answer button fits Telegram's 64 byte callback_data limit", () => {
@@ -503,7 +503,7 @@ test("router: a stale answer tap is acknowledged without changing the session", 
   h.tap(["a", session.id, 0, 2].join("|"));
   const repeat = h.tap(["a", session.id, 0, 3].join("|"));
   assert.deepEqual(methodsOf(repeat), ["answerCallbackQuery"]);
-  assert.match(repeat[0].payload.text, /уже отвечен/);
+  assert.match(repeat[0].payload.text, /вже відповіли/);
   assert.deepEqual(h.sessions.get(777, h.clock.now).answers, [2]);
 });
 
@@ -511,29 +511,29 @@ test("router: a bare digit answers the current question and 4 is refused", () =>
   const h = harness();
   h.say("/gad7");
   const advanced = h.say("2");
-  assert.match(lastText(advanced), /Вопрос 2 из 7/);
+  assert.match(lastText(advanced), /Питання 2 з 7/);
   assert.deepEqual(h.sessions.get(777, h.clock.now).answers, [2]);
   // Out of range digits are not answers, so they fall through to the hint.
-  assert.match(lastText(h.say("4")), /Не понял команду/);
+  assert.match(lastText(h.say("4")), /Не зрозумів команду/);
   assert.equal(h.sessions.get(777, h.clock.now).answers.length, 1);
 });
 
 test("router: a digit outside a session is a hint, not an answer", () => {
   const h = harness();
-  assert.match(lastText(h.say("2")), /Не понял команду/);
+  assert.match(lastText(h.say("2")), /Не зрозумів команду/);
   assert.equal(h.store.history(777).length, 0);
 });
 
 test("router: PHQ-9 asks the unscored impairment item and shows the support block", () => {
   const h = harness();
   const started = h.say("/phq9");
-  assert.match(started[0].payload.text, /Вопросов: 10/);
+  assert.match(started[0].payload.text, /Питань: 10/);
   const finished = completeViaKeyboard(h, PHQ9, [2, 2, 2, 2, 2, 2, 2, 2, 1, 3]);
   const text = lastText(finished);
-  assert.match(text, /Баллы: <b>17<\/b> из 27/);
-  assert.match(text, /Влияние на жизнь: крайне трудно/);
-  assert.match(text, /не оставайтесь с этим один на один/);
-  assert.match(text, /112/);
+  assert.match(text, /Бали: <b>17<\/b> з 27/);
+  assert.match(text, /Вплив на життя: надзвичайно ускладнювали/);
+  assert.match(text, /не залишайтеся з цим наодинці/);
+  assert.match(text, /7333/, "the 24 hour crisis line is named");
   const stored = h.store.lastResult(777, "phq9");
   assert.equal(stored.risk, true);
   assert.equal(stored.impairment, 3);
@@ -543,9 +543,9 @@ test("router: a calm PHQ-9 result omits the support block", () => {
   const h = harness();
   const finished = completeViaKeyboard(h, PHQ9, [0, 1, 0, 1, 0, 0, 1, 0, 0, 0]);
   const text = lastText(finished);
-  assert.match(text, /Баллы: <b>3<\/b> из 27/);
-  assert.match(text, /ниже порога 10/);
-  assert.doesNotMatch(text, /один на один/);
+  assert.match(text, /Бали: <b>3<\/b> з 27/);
+  assert.match(text, /нижче порогу 10/);
+  assert.doesNotMatch(text, /наодинці/);
 });
 
 test("router: a second run reports the change from the previous score", () => {
@@ -553,10 +553,10 @@ test("router: a second run reports the change from the previous score", () => {
   completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
   h.clock.now += WEEK_MS;
   const second = completeViaKeyboard(h, GAD7, [0, 0, 0, 0, 0, 0, 0]);
-  assert.match(lastText(second), /Динамика: -7 к прошлому разу/);
+  assert.match(lastText(second), /Динаміка: -7 до минулого разу/);
   h.clock.now += WEEK_MS;
   const third = completeViaKeyboard(h, GAD7, [0, 0, 0, 0, 0, 0, 0]);
-  assert.match(lastText(third), /Динамика: без изменений/);
+  assert.match(lastText(third), /Динаміка: без змін/);
   assert.equal(h.store.history(777, "gad7").length, 3);
 });
 
@@ -564,10 +564,10 @@ test("router: /cancel drops an unfinished run and stores nothing", () => {
   const h = harness();
   h.say("/gad7");
   h.say("1");
-  assert.match(lastText(h.say("/cancel")), /прерван/);
+  assert.match(lastText(h.say("/cancel")), /перервано/);
   assert.equal(h.sessions.size(), 0);
   assert.equal(h.store.history(777).length, 0);
-  assert.match(lastText(h.say("/cancel")), /Нечего прерывать/);
+  assert.match(lastText(h.say("/cancel")), /Немає чого перервати/);
 });
 
 test("router: starting the other instrument replaces the run in progress", () => {
@@ -583,33 +583,33 @@ test("router: starting the other instrument replaces the run in progress", () =>
 
 test("router: /results and /last read the stored history", () => {
   const h = harness();
-  assert.match(lastText(h.say("/results")), /ещё нет прохождений/);
-  assert.match(lastText(h.say("/last")), /нет данных/);
+  assert.match(lastText(h.say("/results")), /ще немає проходжень/);
+  assert.match(lastText(h.say("/last")), /немає даних/);
   completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
   const results = lastText(h.say("/results"));
   assert.match(results, /16\.09\.2026 15:00 : <b>7<\/b>\/21/);
   assert.match(lastText(h.say("/last")), /GAD-7<\/b>: 7\/21/);
-  assert.match(lastText(h.tap("h|all")), /История результатов/);
+  assert.match(lastText(h.tap("h|all")), /Історія результатів/);
 });
 
 test("router: reminder settings can be read, disabled, re-enabled, and retimed", () => {
   const h = harness();
-  assert.match(lastText(h.say("/remind")), /Напоминания<\/b>: включены/);
-  assert.match(lastText(h.say("/remind")), /Следующее: 23\.09\.2026 10:00/);
-  assert.match(lastText(h.say("/remind off")), /выключены/);
+  assert.match(lastText(h.say("/remind")), /Нагадування<\/b>: увімкнені/);
+  assert.match(lastText(h.say("/remind")), /Наступне: 23\.09\.2026 10:00/);
+  assert.match(lastText(h.say("/remind off")), /вимкнені/);
   assert.equal(h.store.user(777).remindersEnabled, false);
-  assert.match(lastText(h.say("/remind on")), /включены/);
+  assert.match(lastText(h.say("/remind on")), /увімкнені/);
   assert.equal(h.store.user(777).remindersEnabled, true);
-  assert.match(lastText(h.say("/remind 09:30")), /среда, время 09:30/);
+  assert.match(lastText(h.say("/remind 09:30")), /середа, час 09:30/);
   assert.equal(h.store.user(777).reminderTime, "09:30");
   h.say("/remind 9:05");
   assert.equal(h.store.user(777).reminderTime, "09:05", "the stored time is normalized");
   h.say("/remind 09:30");
-  assert.match(lastText(h.say("/remind 99:99")), /ЧЧ:ММ/);
+  assert.match(lastText(h.say("/remind 99:99")), /ГГ:ХХ/);
   assert.equal(h.store.user(777).reminderTime, "09:30");
-  assert.match(lastText(h.tap("r|off")), /выключены/);
+  assert.match(lastText(h.tap("r|off")), /вимкнені/);
   assert.equal(h.store.user(777).remindersEnabled, false);
-  assert.match(lastText(h.tap("r|status")), /Напоминания/);
+  assert.match(lastText(h.tap("r|status")), /Нагадування/);
 });
 
 test("router: /tz changes the offset used for display and scheduling", () => {
@@ -618,7 +618,7 @@ test("router: /tz changes the offset used for display and scheduling", () => {
   assert.match(lastText(h.say("/tz -08:00")), /UTC-08:00/);
   assert.equal(h.store.user(777).tzOffsetMinutes, -480);
   assert.match(lastText(h.say("/remind")), /UTC-08:00/);
-  assert.match(lastText(h.say("/tz nonsense")), /Не понял смещение/);
+  assert.match(lastText(h.say("/tz nonsense")), /Не зрозумів зсув/);
   assert.equal(h.store.user(777).tzOffsetMinutes, -480);
   completeViaKeyboard(h, GAD7, [0, 0, 0, 0, 0, 0, 0]);
   // 12:00 UTC is 04:00 in UTC-8.
@@ -640,10 +640,10 @@ test("router: /delete asks before wiping and then removes everything", () => {
   const prompt = h.say("/delete");
   const confirm = prompt[0].payload.reply_markup.inline_keyboard[0];
   assert.deepEqual(confirm.map((button) => button.callback_data), ["del|yes", "del|no"]);
-  assert.match(lastText(h.tap("del|no")), /отменено/);
+  assert.match(lastText(h.tap("del|no")), /скасовано/);
   assert.equal(h.store.history(777).length, 1);
   const deleted = h.tap("del|yes");
-  assert.match(lastText(deleted), /Все данные удалены/);
+  assert.match(lastText(deleted), /Усі дані видалено/);
   assert.equal(h.store.hasUser(777), false);
   assert.equal(h.store.history(777).length, 0);
 });
@@ -652,21 +652,21 @@ test("router: a group chat is refused so answers stay private", () => {
   const h = harness();
   const group = { id: -100, type: "supergroup" };
   const actions = h.router.handleUpdate({ update_id: 3, message: { message_id: 1, chat: group, text: "/gad7" } });
-  assert.match(lastText(actions), /только в личном чате/);
+  assert.match(lastText(actions), /лише в особистому чаті/);
   assert.equal(h.sessions.size(), 0);
-  const chatter = h.router.handleUpdate({ update_id: 4, message: { message_id: 2, chat: group, text: "привет" } });
+  const chatter = h.router.handleUpdate({ update_id: 4, message: { message_id: 2, chat: group, text: "привіт" } });
   assert.deepEqual(chatter, [], "ordinary group chatter is ignored");
 });
 
 test("router: unknown commands, empty updates, and stray callbacks stay harmless", () => {
   const h = harness();
-  assert.match(lastText(h.say("/unknown")), /Не понял команду/);
+  assert.match(lastText(h.say("/unknown")), /Не зрозумів команду/);
   assert.deepEqual(h.router.handleUpdate({}), []);
   assert.deepEqual(h.router.handleUpdate(null), []);
   assert.deepEqual(h.router.handleUpdate({ update_id: 5, edited_message: {} }), []);
   assert.deepEqual(methodsOf(h.tap("mystery")), ["answerCallbackQuery"]);
   assert.deepEqual(methodsOf(h.tap("a|nosession|0|1")), ["answerCallbackQuery", "sendMessage"]);
-  assert.match(lastText(h.tap("s|unknown")), /Неизвестный опросник/);
+  assert.match(lastText(h.tap("s|unknown")), /Невідомий опитувальник/);
 });
 
 test("router: a start button launches the instrument", () => {
@@ -688,12 +688,12 @@ test("router: display names cannot inject HTML into a message", () => {
 
 test("router: the weekly reminder quotes the last score of each instrument", () => {
   const h = harness();
-  assert.match(weeklyReminder(h.store, 777), /ещё не проходили/);
+  assert.match(weeklyReminder(h.store, 777), /ще не проходили/);
   completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
   const text = weeklyReminder(h.store, 777);
-  assert.match(text, /Среда/);
-  assert.match(text, /GAD-7: прошлый балл 7\/21/);
-  assert.match(text, /PHQ-9: ещё не проходили/);
+  assert.match(text, /Середа/);
+  assert.match(text, /GAD-7: минулий бал 7\/21/);
+  assert.match(text, /PHQ-9: ще не проходили/);
   const actions = h.router.reminderActions(777, text);
   assert.deepEqual(methodsOf(actions), ["sendMessage"]);
   assert.ok(actions[0].payload.reply_markup.inline_keyboard.length >= 1);
@@ -725,13 +725,13 @@ test("telegram: a successful call posts JSON to the token path and returns the r
     const client = new TelegramClient({ token: FAKE_TOKEN, apiBase: "http://127.0.0.1:" + port });
     const me = await client.getMe();
     assert.equal(me.username, "test_bot");
-    const sent = await client.sendMessage(5, "привет", { parse_mode: "HTML" });
+    const sent = await client.sendMessage(5, "привіт", { parse_mode: "HTML" });
     assert.equal(sent.id, 1);
     assert.equal(seen.length, 2);
     assert.equal(seen[0].url, "/bot" + FAKE_TOKEN + "/getMe");
     assert.equal(seen[1].method, "POST");
     assert.equal(seen[1].type, "application/json");
-    assert.deepEqual(JSON.parse(seen[1].body), { chat_id: 5, text: "привет", parse_mode: "HTML" });
+    assert.deepEqual(JSON.parse(seen[1].body), { chat_id: 5, text: "привіт", parse_mode: "HTML" });
   } finally {
     await closeServer(server);
   }
@@ -873,7 +873,8 @@ test("config: a valid environment produces resolved reminder defaults", () => {
   assert.equal(config.reminder.time, "09:30");
   assert.equal(config.reminder.offsetMinutes, -330);
   assert.equal(config.reminder.graceMs, 6 * 60 * 60 * 1000);
-  assert.match(config.crisisContact, /112/);
+  assert.match(config.crisisContact, /7333/);
+  assert.match(config.crisisContact, /howareu\.com/);
 });
 
 test("config: bad input fails closed with an explanation", () => {
@@ -935,7 +936,7 @@ test("runtime: the Wednesday sweep reminds once per weekly slot", async () => {
   const reminded = await h.runtime.sweepReminders(WED_NOON_UTC);
   assert.deepEqual(reminded, [8]);
   assert.equal(h.store.user(8).lastRemindedAt, Date.parse("2026-09-16T07:00:00Z"));
-  assert.match(h.client.calls[0].payload.text, /Среда/);
+  assert.match(h.client.calls[0].payload.text, /Середа/);
   // The same slot must not fire again, the next week must.
   assert.deepEqual(await h.runtime.sweepReminders(WED_NOON_UTC + 60000), []);
   assert.deepEqual(await h.runtime.sweepReminders(WED_NOON_UTC + WEEK_MS), [8]);

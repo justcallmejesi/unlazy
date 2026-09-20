@@ -8,11 +8,16 @@ import { parseTimeOfDay, parseUtcOffset } from "./reminders.mjs";
 const BOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TOKEN_SHAPE = /^\d{6,}:[A-Za-z0-9_-]{30,}$/;
 
+// Ukrainian services. Verified against the operators' own pages; see the
+// sources listed in telegram-bot/README.md. Override with CRISIS_CONTACT for
+// another country.
 export const DEFAULT_CRISIS_CONTACT = [
-  "Куда можно обратиться:",
-  "• Единый номер экстренных служб: 112",
-  "• Детский телефон доверия для детей, подростков и родителей: 8-800-2000-122",
-  "• Линии доверия других стран: https://findahelpline.com",
+  "Куди можна звернутися:",
+  "• Екстрена допомога: 103 або 112",
+  "• LifeLine Ukraine, лінія запобігання самогубствам: 7333, безкоштовно, круглодобово",
+  "• Національна дитяча гаряча лінія: 116 111 з мобільного або 0 800 500 225",
+  "• Служби підтримки і техніки самодопомоги: https://howareu.com",
+  "• Лінії довіри інших країн: https://findahelpline.com",
 ].join("\n");
 
 // Minimal KEY=VALUE reader for a local .env file. Existing environment
@@ -61,9 +66,14 @@ export function loadConfig(env = process.env, options = {}) {
 
   const time = String(env.REMINDER_TIME || "10:00").trim();
   if (!parseTimeOfDay(time)) throw new Error("REMINDER_TIME must be ЧЧ:ММ, for example 10:00");
+  // Kyiv time: +3 during summer time, +2 from the last Sunday of October to
+  // the last Sunday of March. Scheduling uses fixed offsets, so this default
+  // needs changing at each transition, or each user sets their own with /tz.
   const rawOffset = String(env.REMINDER_UTC_OFFSET === undefined ? "+3" : env.REMINDER_UTC_OFFSET).trim();
   const offsetMinutes = parseUtcOffset(rawOffset);
-  if (offsetMinutes === null) throw new Error("REMINDER_UTC_OFFSET must be an offset such as +3 or -05:30");
+  if (offsetMinutes === null) {
+    throw new Error("REMINDER_UTC_OFFSET must be an offset such as +3 for Kyiv summer time or +2 for winter");
+  }
 
   const memoryOnly = /^(1|true|yes)$/i.test(String(env.MEMORY_ONLY || ""));
   const dataFile = memoryOnly

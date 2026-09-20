@@ -90,7 +90,7 @@ export function formatUtcOffset(minutes) {
 
 // Local wall-clock rendering for a fixed offset, without Intl time zones.
 export function formatLocalDateTime(timestampMs, offsetMinutes) {
-  if (!Number.isFinite(timestampMs)) return "дата неизвестна";
+  if (!Number.isFinite(timestampMs)) return "дата невідома";
   const local = new Date(timestampMs + offsetMinutes * 60 * 1000);
   const pad = (value) => String(value).padStart(2, "0");
   return pad(local.getUTCDate()) + "." + pad(local.getUTCMonth() + 1) + "." + local.getUTCFullYear() +
