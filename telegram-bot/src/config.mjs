@@ -75,6 +75,13 @@ export function loadConfig(env = process.env, options = {}) {
     throw new Error("REMINDER_UTC_OFFSET must be an offset such as +3 for Kyiv summer time or +2 for winter");
   }
 
+  // Telegram only opens a Mini App over https, so a wrong scheme is rejected
+  // here instead of failing silently inside the client.
+  const webappUrl = String(env.WEBAPP_URL || "").trim();
+  if (webappUrl && !/^https:\/\/[^\s]+$/.test(webappUrl)) {
+    throw new Error("WEBAPP_URL must be an https URL, for example https://example.pages.dev/");
+  }
+
   const memoryOnly = /^(1|true|yes)$/i.test(String(env.MEMORY_ONLY || ""));
   const dataFile = memoryOnly
     ? null
@@ -83,6 +90,7 @@ export function loadConfig(env = process.env, options = {}) {
   return {
     token,
     apiBase: String(env.API_BASE || "https://api.telegram.org").replace(/\/+$/, ""),
+    webappUrl: webappUrl || null,
     dataFile,
     memoryOnly,
     botDir: BOT_DIR,

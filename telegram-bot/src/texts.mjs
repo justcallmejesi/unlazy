@@ -13,6 +13,7 @@ export const DISCLAIMER =
   "Підсумковий бал не замінює консультацію лікаря або психотерапевта.";
 
 export const COMMANDS = [
+  { command: "app", description: "Відкрити застосунок у вікні" },
   { command: "gad7", description: "Пройти GAD-7 (тривога, 7 питань)" },
   { command: "phq9", description: "Пройти PHQ-9 (настрій, 9 питань)" },
   { command: "results", description: "Історія результатів" },
@@ -98,6 +99,37 @@ export function answerKeyboard(instrument, session) {
       callback_data: ["a", session.id, session.index, option.value].join("|"),
     }]),
   };
+}
+
+// The one full-width button under the input field. A keyboard button is the
+// only launch type whose Mini App can send data back without a server, so this
+// is what the app is opened from.
+export function appKeyboard(webappUrl) {
+  return {
+    keyboard: [[{ text: "Відкрити застосунок", web_app: { url: webappUrl } }]],
+    resize_keyboard: true,
+    is_persistent: true,
+  };
+}
+
+export function appIntro() {
+  return [
+    "<b>Застосунок</b>",
+    "",
+    "Кнопка «Відкрити застосунок» під полем введення відкриває вікно поверх чату.",
+    "Там опитувальники, статистика з графіками, історія, нагадування і ваші дані.",
+    "",
+    "У чат приходить лише підсумок кожного проходження. Опитувальники так само працюють і тут, командами /gad7 та /phq9.",
+  ].join("\n");
+}
+
+export function appResultSaved(instrument, result) {
+  return "Збережено із застосунку: <b>" + escapeHtml(instrument.title) + "</b> " +
+    result.score + "/" + instrument.maxScore + ", " + escapeHtml(result.severity) + ".";
+}
+
+export function appRejected() {
+  return "Не вдалося прочитати дані із застосунку. Спробуйте ще раз або пройдіть опитувальник у чаті: /gad7, /phq9.";
 }
 
 export function startKeyboard() {

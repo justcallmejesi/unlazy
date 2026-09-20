@@ -10,10 +10,11 @@ import {
   formatTimeOfDay, formatUtcOffset, nextDueAfter, parseTimeOfDay, parseUtcOffset, resolveSchedule,
 } from "./reminders.mjs";
 import {
-  aboutText, answerKeyboard, exportMessage, greeting, helpText, historyMessage, lastMessage,
-  noteKeyboard, noteQuestion, noteSaved, noteSkipped, questionText, reminderStatus, resultMessage,
-  startKeyboard, unknownInput,
+  aboutText, answerKeyboard, appIntro, appKeyboard, appRejected, appResultSaved, exportMessage,
+  greeting, helpText, historyMessage, lastMessage, noteKeyboard, noteQuestion, noteSaved,
+  noteSkipped, questionText, reminderStatus, resultMessage, startKeyboard, unknownInput,
 } from "./texts.mjs";
+import { parseWebAppPayload } from "./webapp.mjs";
 
 const HTML = { parse_mode: "HTML" };
 const PRIVATE_ONLY =
@@ -171,13 +172,22 @@ export function createRouter(context) {
   function handleCommand(chatId, parsed, message) {
     const { command, args } = parsed;
     switch (command) {
-      case "start":
+      case "start": {
         if (!store.user(chatId).firstSeenAt) {
           store.updateUser(chatId, { firstSeenAt: new Date(now()).toISOString() });
         }
-        return [send(chatId, greeting(message && message.from && message.from.first_name), {
-          reply_markup: startKeyboard(),
-        })];
+        const hello = send(chatId, greeting(message && message.from && message.from.first_name), {
+          reply_markup: config.webappUrl ? appKeyboard(config.webappUrl) : startKeyboard(),
+        });
+        // Without the app the chat flow is the whole product, so the inline
+        // start buttons stay the entry point.
+        return config.webappUrl ? [hello, send(chatId, appIntro())] : [hello];
+      }
+      case "app":
+        if (!config.webappUrl) {
+          return [send(chatId, "Застосунок не налаштований. Опитувальники доступні тут: /gad7, /phq9.")];
+        }
+        return [send(chatId, appIntro(), { reply_markup: appKeyboard(config.webappUrl) })];
       case "help":
         return [send(chatId, helpText(), { reply_markup: startKeyboard() })];
       case "about":
@@ -227,6 +237,51 @@ export function createRouter(context) {
     }
   }
 
+  // Data returned by the Mini App. The answers are rescored here: the payload
+  // carries no score, and nothing from the client is stored unvalidated.
+  function handleWebAppData(chatId, raw) {
+    const parsed = parseWebAppPayload(raw);
+    if (!parsed.ok) return { actions: [send(chatId, appRejected())], reason: parsed.reason };
+    const payload = parsed.payload;
+
+    if (payload.type === "result") {
+      const instrument = getInstrument(payload.instrumentId);
+      const result = buildResult(instrument, payload.answers, now());
+      const previous = store.lastResult(chatId, instrument.id);
+      const stored = store.addResult(chatId, result);
+      if (payload.note) store.annotateResult(chatId, stored, payload.note);
+      sessions.cancel(chatId);
+      sessions.clearNote(chatId);
+      const offsetMinutes = offsetFor(chatId);
+      return {
+        actions: [
+          send(chatId, appResultSaved(instrument, result)),
+          send(chatId, resultMessage(instrument, result, previous, offsetMinutes, config.crisisContact)),
+        ],
+        payload,
+      };
+    }
+
+    if (payload.type === "reminders") {
+      store.updateUser(chatId, payload.settings);
+      return { actions: [send(chatId, reminderLine(chatId))], payload };
+    }
+
+    // Deletion is confirmed in the chat rather than performed on a tap inside
+    // the app, so an accidental press cannot wipe the history.
+    return {
+      actions: [send(chatId, "Видалити всі збережені результати та налаштування? Дію не можна скасувати.", {
+        reply_markup: {
+          inline_keyboard: [[
+            { text: "Так, видалити", callback_data: "del|yes" },
+            { text: "Скасувати", callback_data: "del|no" },
+          ]],
+        },
+      })],
+      payload,
+    };
+  }
+
   function handleMessage(message) {
     const chat = message.chat || {};
     const chatId = chat.id;
@@ -236,6 +291,7 @@ export function createRouter(context) {
     if (chat.type && chat.type !== "private") {
       return parsed ? [send(chatId, PRIVATE_ONLY)] : [];
     }
+    if (message.web_app_data) return handleWebAppData(chatId, message.web_app_data.data).actions;
     if (parsed) return handleCommand(chatId, parsed, message);
     // An open question is waiting: this message is the answer to it. Checked
     // before the digit shortcut, which needs an active questionnaire anyway.
@@ -323,5 +379,8 @@ export function createRouter(context) {
     return [send(chatId, text, { reply_markup: startKeyboard() })];
   }
 
-  return { handleUpdate, handleMessage, handleCallback, reminderActions, instruments: INSTRUMENT_LIST };
+  return {
+    handleUpdate, handleMessage, handleCallback, handleWebAppData, reminderActions,
+    instruments: INSTRUMENT_LIST,
+  };
 }

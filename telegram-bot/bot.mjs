@@ -233,9 +233,25 @@ async function main() {
   const me = await client.getMe();
   log("authorized as @" + (me && me.username));
   try {
-    await client.setMyCommands(COMMANDS.map((entry) => ({ command: entry.command, description: entry.description })));
+    await client.setMyCommands(COMMANDS
+      .filter((entry) => entry.command !== "app" || config.webappUrl)
+      .map((entry) => ({ command: entry.command, description: entry.description })));
   } catch (error) {
     logError("setMyCommands failed: " + client.redact(String(error && error.message)));
+  }
+  if (config.webappUrl) {
+    // The button beside the input field opens the same page. It cannot send
+    // data back, so the keyboard button remains the one that submits.
+    try {
+      await client.call("setChatMenuButton", {
+        menu_button: { type: "web_app", text: "Застосунок", web_app: { url: config.webappUrl } },
+      });
+      log("Mini App enabled: " + config.webappUrl);
+    } catch (error) {
+      logError("setChatMenuButton failed: " + client.redact(String(error && error.message)));
+    }
+  } else {
+    log("WEBAPP_URL is not set, running the chat-only flow");
   }
 
   const runtime = new BotRuntime({ client, store, sessions, router, config });

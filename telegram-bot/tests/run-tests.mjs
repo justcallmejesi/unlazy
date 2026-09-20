@@ -10,7 +10,8 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
 import { GAD7, PHQ9, buildResult, scoreAnswers, severityOf, riskFlagged } from "../src/instruments.mjs";
@@ -24,6 +25,8 @@ import { createRouter, parseAnswerCallback, parseCommand } from "../src/router.m
 import { TelegramClient, TelegramError, escapeHtml } from "../src/telegram.mjs";
 import { DEFAULT_CRISIS_CONTACT, loadConfig, parseEnvFile } from "../src/config.mjs";
 import { BotRuntime, buildBot } from "../bot.mjs";
+import { MAX_PAYLOAD_BYTES, parseWebAppPayload } from "../src/webapp.mjs";
+import { COPY, SOURCE, isCurrent } from "../webapp/build.mjs";
 import { historyMessage, lastMessage, weeklyReminder } from "../src/texts.mjs";
 
 const filter = process.argv[2] || "";
@@ -43,6 +46,7 @@ function fixtureConfig(overrides = {}) {
     sessionIdleTimeoutMs: 60 * 60 * 1000,
     memoryOnly: true,
     dataFile: null,
+    webappUrl: null,
   }, overrides);
 }
 
@@ -842,6 +846,204 @@ test("router: the weekly reminder quotes the last score of each instrument", () 
   const actions = h.router.reminderActions(777, text);
   assert.deepEqual(methodsOf(actions), ["sendMessage"]);
   assert.ok(actions[0].payload.reply_markup.inline_keyboard.length >= 1);
+});
+
+// --------------------------------------------------------------- mini app
+
+test("webapp: the app's copy of the questionnaires is identical to the bot's", () => {
+  assert.equal(isCurrent(), true,
+    "run node telegram-bot/webapp/build.mjs after changing src/instruments.mjs");
+  assert.equal(readFileSync(COPY, "utf8"), readFileSync(SOURCE, "utf8"));
+});
+
+test("webapp: the page and its script exist and reference each other", () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const html = readFileSync(join(here, "..", "webapp", "index.html"), "utf8");
+  const app = readFileSync(join(here, "..", "webapp", "app.js"), "utf8");
+  assert.match(html, /telegram-web-app\.js/, "the Telegram bridge is loaded");
+  assert.match(html, /<script type="module" src="\.\/app\.js">/);
+  assert.match(app, /from "\.\/instruments\.mjs"/, "questions come from the shared copy");
+  // Both severity scales appear in the app through the shared definitions, so
+  // the page itself must not restate a band or a question.
+  assert.doesNotMatch(html, /тривоги або напруження/, "the page must not restate an item");
+  assert.doesNotMatch(app, /помірно тяжкі/, "the script must not restate a band");
+});
+
+test("webapp: a well formed result payload is accepted and normalized", () => {
+  const ok = parseWebAppPayload(JSON.stringify({
+    v: 1, type: "result", instrument: "gad7", answers: [1, 2, 1, 2, 1, 2, 1], note: "  тиждень так собі  ",
+  }));
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.payload, {
+    type: "result", instrumentId: "gad7", answers: [1, 2, 1, 2, 1, 2, 1], note: "тиждень так собі",
+  });
+  const blankNote = parseWebAppPayload(JSON.stringify({
+    v: 1, type: "result", instrument: "phq9", answers: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], note: "   ",
+  }));
+  assert.equal(blankNote.payload.note, null);
+  const noNote = parseWebAppPayload(JSON.stringify({
+    v: 1, type: "result", instrument: "phq9", answers: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  }));
+  assert.equal(noNote.payload.note, null);
+});
+
+test("webapp: every malformed payload is refused with a reason", () => {
+  const cases = [
+    ["", /empty payload/],
+    ["not json", /not JSON/],
+    ["[]", /not an object/],
+    ['{"v":2,"type":"result"}', /unsupported payload version 2/],
+    ['{"v":1,"type":"mystery"}', /unknown payload type/],
+    ['{"v":1,"type":"result","instrument":"bdi","answers":[]}', /unknown instrument/],
+    ['{"v":1,"type":"result","instrument":"gad7","answers":"1234567"}', /must be an array/],
+    ['{"v":1,"type":"result","instrument":"gad7","answers":[1,1,1]}', /exactly 7 answers/],
+    ['{"v":1,"type":"result","instrument":"gad7","answers":[1,1,1,1,1,1,4]}', /outside the option set/],
+    ['{"v":1,"type":"result","instrument":"gad7","answers":[1,1,1,1,1,1,1.5]}', /not an integer/],
+    ['{"v":1,"type":"result","instrument":"gad7","answers":[1,1,1,1,1,1,1],"note":7}', /note must be a string/],
+    ['{"v":1,"type":"reminders"}', /changes nothing/],
+    ['{"v":1,"type":"reminders","enabled":"yes"}', /must be a boolean/],
+    ['{"v":1,"type":"reminders","time":"25:00"}', /time must be/],
+    ['{"v":1,"type":"reminders","tz":900}', /within 14 hours/],
+    ['{"v":1,"type":"reminders","tz":1.5}', /within 14 hours/],
+  ];
+  cases.forEach(([raw, pattern]) => {
+    const outcome = parseWebAppPayload(raw);
+    assert.equal(outcome.ok, false, raw);
+    assert.match(outcome.reason, pattern, raw);
+  });
+  // Telegram caps sendData at 4096 bytes; a longer payload is refused here too.
+  const huge = JSON.stringify({
+    v: 1, type: "result", instrument: "gad7", answers: [0, 0, 0, 0, 0, 0, 0], note: "я".repeat(3000),
+  });
+  assert.ok(Buffer.byteLength(huge, "utf8") > MAX_PAYLOAD_BYTES);
+  assert.match(parseWebAppPayload(huge).reason, /over 4096 bytes/);
+  assert.equal(parseWebAppPayload(null).ok, false);
+});
+
+test("webapp: a note at the bound stays inside one sendData payload", () => {
+  const payload = JSON.stringify({
+    v: 1, type: "result", instrument: "phq9", answers: [3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+    note: "я".repeat(1000),
+  });
+  assert.ok(Buffer.byteLength(payload, "utf8") <= MAX_PAYLOAD_BYTES,
+    "1000 Cyrillic characters plus the answers must fit Telegram's limit");
+  assert.equal(parseWebAppPayload(payload).ok, true);
+});
+
+test("webapp: a result from the app is rescored, stored, and reported in the chat", () => {
+  const h = harness({ config: { webappUrl: "https://example.pages.dev/" } });
+  const actions = h.router.handleUpdate({
+    update_id: 7,
+    message: {
+      message_id: 1,
+      chat: h.chat,
+      web_app_data: {
+        button_text: "Відкрити застосунок",
+        data: JSON.stringify({
+          v: 1, type: "result", instrument: "gad7", answers: [2, 2, 2, 2, 2, 2, 2], note: "виснажливий тиждень",
+        }),
+      },
+    },
+  });
+  assert.match(textsOf(actions)[0], /Збережено із застосунку/);
+  assert.match(textsOf(actions)[0], /14\/21/);
+  assert.match(scoreText(actions), /Бали: <b>14<\/b> з 21/);
+  const stored = h.store.lastResult(777, "gad7");
+  assert.equal(stored.score, 14, "the score is computed by the bot, not taken from the payload");
+  assert.equal(stored.severity, "помірна тривога");
+  assert.equal(stored.note, "виснажливий тиждень");
+  // No chat-side prompt is left dangling after an app submission.
+  assert.equal(h.sessions.pendingNoteCount(), 0);
+  assert.equal(h.sessions.size(), 0);
+});
+
+test("webapp: a fabricated score in the payload is ignored", () => {
+  const h = harness({ config: { webappUrl: "https://example.pages.dev/" } });
+  h.router.handleUpdate({
+    update_id: 8,
+    message: {
+      message_id: 1,
+      chat: h.chat,
+      web_app_data: {
+        data: JSON.stringify({
+          v: 1, type: "result", instrument: "gad7", answers: [0, 0, 0, 0, 0, 0, 0], score: 21, severity: "вигадка",
+        }),
+      },
+    },
+  });
+  const stored = h.store.lastResult(777, "gad7");
+  assert.equal(stored.score, 0);
+  assert.equal(stored.severity, "мінімальна тривога");
+});
+
+test("webapp: a rejected payload answers with a recovery hint and stores nothing", () => {
+  const h = harness({ config: { webappUrl: "https://example.pages.dev/" } });
+  const actions = h.router.handleUpdate({
+    update_id: 9,
+    message: { message_id: 1, chat: h.chat, web_app_data: { data: "{\"v\":1,\"type\":\"result\"}" } },
+  });
+  assert.match(lastText(actions), /Не вдалося прочитати дані/);
+  assert.equal(h.store.history(777).length, 0);
+  const outcome = h.router.handleWebAppData(777, "{oops");
+  assert.match(outcome.reason, /not JSON/);
+});
+
+test("webapp: reminder settings from the app are applied and echoed", () => {
+  const h = harness({ config: { webappUrl: "https://example.pages.dev/" } });
+  const actions = h.router.handleUpdate({
+    update_id: 10,
+    message: {
+      message_id: 1,
+      chat: h.chat,
+      web_app_data: { data: JSON.stringify({ v: 1, type: "reminders", enabled: true, time: "08:15", tz: 120 }) },
+    },
+  });
+  assert.match(lastText(actions), /середа, час 08:15/);
+  assert.match(lastText(actions), /UTC\+02:00/);
+  const user = h.store.user(777);
+  assert.equal(user.remindersEnabled, true);
+  assert.equal(user.reminderTime, "08:15");
+  assert.equal(user.tzOffsetMinutes, 120);
+});
+
+test("webapp: deletion from the app asks in the chat instead of wiping at once", () => {
+  const h = harness({ config: { webappUrl: "https://example.pages.dev/" } });
+  completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
+  const actions = h.router.handleUpdate({
+    update_id: 11,
+    message: { message_id: 1, chat: h.chat, web_app_data: { data: JSON.stringify({ v: 1, type: "delete" }) } },
+  });
+  assert.match(lastText(actions), /Дію не можна скасувати/);
+  assert.equal(h.store.history(777).length, 1, "nothing is deleted before the confirmation");
+  h.tap("del|yes");
+  assert.equal(h.store.hasUser(777), false);
+});
+
+test("webapp: /start offers the launch button only when a URL is configured", () => {
+  const withApp = harness({ config: { webappUrl: "https://example.pages.dev/" } });
+  const started = withApp.say("/start");
+  const keyboard = started[0].payload.reply_markup.keyboard;
+  assert.equal(keyboard[0][0].web_app.url, "https://example.pages.dev/");
+  assert.match(keyboard[0][0].text, /Відкрити застосунок/);
+  assert.equal(started[0].payload.reply_markup.is_persistent, true);
+  assert.match(lastText(started), /вікно поверх чату/);
+  assert.match(lastText(withApp.say("/app")), /Відкрити застосунок/);
+
+  const chatOnly = harness();
+  const plain = chatOnly.say("/start");
+  assert.equal(plain.length, 1);
+  assert.ok(plain[0].payload.reply_markup.inline_keyboard, "the chat flow keeps its inline buttons");
+  assert.match(lastText(chatOnly.say("/app")), /не налаштований/);
+});
+
+test("webapp: WEBAPP_URL must be https", () => {
+  const good = loadConfig({ BOT_TOKEN: FAKE_TOKEN, WEBAPP_URL: "https://example.pages.dev/" }, { envFile: false });
+  assert.equal(good.webappUrl, "https://example.pages.dev/");
+  assert.equal(loadConfig({ BOT_TOKEN: FAKE_TOKEN }, { envFile: false }).webappUrl, null);
+  assert.throws(() => loadConfig({ BOT_TOKEN: FAKE_TOKEN, WEBAPP_URL: "http://example.com" }, { envFile: false }),
+    /must be an https URL/);
+  assert.throws(() => loadConfig({ BOT_TOKEN: FAKE_TOKEN, WEBAPP_URL: "example.com" }, { envFile: false }),
+    /must be an https URL/);
 });
 
 // --------------------------------------------------------------- telegram client
