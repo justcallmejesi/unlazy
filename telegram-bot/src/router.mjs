@@ -11,7 +11,8 @@ import {
 } from "./reminders.mjs";
 import {
   aboutText, answerKeyboard, exportMessage, greeting, helpText, historyMessage, lastMessage,
-  questionText, reminderStatus, resultMessage, startKeyboard, unknownInput,
+  noteKeyboard, noteQuestion, noteSaved, noteSkipped, questionText, reminderStatus, resultMessage,
+  startKeyboard, unknownInput,
 } from "./texts.mjs";
 
 const HTML = { parse_mode: "HTML" };
@@ -85,15 +86,29 @@ export function createRouter(context) {
     ];
   }
 
+  // The score is stored before the open question is asked, so a person who
+  // never writes anything still keeps the result.
   function finish(chatId, instrument, session) {
     const completedAt = now();
     const result = buildResult(instrument, session.answers, completedAt);
     const previous = store.lastResult(chatId, instrument.id);
-    store.addResult(chatId, result);
+    const stored = store.addResult(chatId, result);
+    const pending = sessions.expectNote(chatId, instrument.id, stored, now());
     const offsetMinutes = offsetFor(chatId);
-    return [send(chatId, resultMessage(instrument, result, previous, offsetMinutes, config.crisisContact), {
-      reply_markup: startKeyboard(),
-    })];
+    return [
+      send(chatId, resultMessage(instrument, result, previous, offsetMinutes, config.crisisContact)),
+      send(chatId, noteQuestion(), { reply_markup: noteKeyboard(pending.id) }),
+    ];
+  }
+
+  function acceptNote(chatId, text) {
+    const pending = sessions.pendingNote(chatId, now());
+    if (!pending) return [];
+    sessions.clearNote(chatId);
+    const annotated = store.annotateResult(chatId, pending.result, text);
+    // The result can be gone: /delete, or 200 newer runs pushing it out.
+    if (!annotated || !annotated.note) return [send(chatId, noteSkipped(), { reply_markup: startKeyboard() })];
+    return [send(chatId, noteSaved(annotated.note), { reply_markup: startKeyboard() })];
   }
 
   // Records one answer and returns the follow-up messages.
@@ -171,11 +186,15 @@ export function createRouter(context) {
       case "phq9":
         // Starting a questionnaire always replaces whatever was in progress.
         sessions.cancel(chatId);
+        sessions.clearNote(chatId);
         return startInstrument(chatId, getInstrument(command));
-      case "cancel":
-        return sessions.cancel(chatId)
-          ? [send(chatId, "Опитувальник перервано. Відповіді не збережені.")]
-          : [send(chatId, "Немає чого перервати.")];
+      case "cancel": {
+        const hadSession = sessions.cancel(chatId);
+        const hadNote = sessions.clearNote(chatId);
+        if (hadSession) return [send(chatId, "Опитувальник перервано. Відповіді не збережені.")];
+        if (hadNote) return [send(chatId, noteSkipped(), { reply_markup: startKeyboard() })];
+        return [send(chatId, "Немає чого перервати.")];
+      }
       case "results":
         return [send(chatId, historyMessage(store, chatId, offsetFor(chatId)), { reply_markup: startKeyboard() })];
       case "last":
@@ -218,6 +237,13 @@ export function createRouter(context) {
       return parsed ? [send(chatId, PRIVATE_ONLY)] : [];
     }
     if (parsed) return handleCommand(chatId, parsed, message);
+    // An open question is waiting: this message is the answer to it. Checked
+    // before the digit shortcut, which needs an active questionnaire anyway.
+    // Whitespace is ignored rather than answered with a hint, which would read
+    // as a refusal while the question is still on screen.
+    if (sessions.pendingNote(chatId, now())) {
+      return text.trim() ? acceptNote(chatId, text) : [];
+    }
     // A bare 0 to 3 answers the current question, which keeps the bot usable
     // when inline keyboards are unavailable.
     if (/^[0-3]$/.test(text.trim()) && sessions.get(chatId, now())) {
@@ -268,9 +294,16 @@ export function createRouter(context) {
       if (parts[1] === "on") return [ack(query.id)].concat(handleRemind(chatId, "on"));
       return [ack(query.id), send(chatId, reminderLine(chatId))];
     }
+    if (parts[0] === "n") {
+      const pending = sessions.pendingNote(chatId, now());
+      if (!pending || pending.id !== parts[1]) return [ack(query.id)];
+      sessions.clearNote(chatId);
+      return [ack(query.id), send(chatId, noteSkipped(), { reply_markup: startKeyboard() })];
+    }
     if (parts[0] === "del") {
       if (parts[1] === "yes") {
         sessions.cancel(chatId);
+        sessions.clearNote(chatId);
         store.forget(chatId);
         return [ack(query.id, "Видалено"), send(chatId, "Усі дані видалено. /start починає заново.")];
       }

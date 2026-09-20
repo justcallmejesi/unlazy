@@ -175,8 +175,10 @@ function demo() {
   const { store, sessions, router } = buildBot(config);
   const chat = { id: 4242, type: "private" };
   const from = { id: 4242, first_name: "Демо" };
-  const script = ["/start", "/gad7", "2", "3", "1", "2", "1", "0", "2", "/phq9"]
-    .concat(["1", "2", "1", "3", "0", "1", "2", "0", "1", "2"])
+  const script = ["/start", "/gad7", "2", "3", "1", "2", "1", "0", "2"]
+    .concat(["Тиждень був напружений: багато роботи і мало сну, але допомагали прогулянки"])
+    .concat(["/phq9", "1", "2", "1", "3", "0", "1", "2", "0", "1", "2"])
+    .concat(["Ближче до вихідних стало легше"])
     .concat(["/last", "/results", "/remind 09:30", "/tz +3", "/remind"]);
 
   script.forEach((text) => {

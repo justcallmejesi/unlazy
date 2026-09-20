@@ -12,6 +12,7 @@ import {
 import { dirname, resolve } from "node:path";
 
 export const MAX_RESULTS_PER_USER = 200;
+export const MAX_NOTE_LENGTH = 1000;
 const SNAPSHOT_VERSION = 1;
 // One ceiling for both directions. The writer must never be able to produce a
 // snapshot the reader refuses, so `flush` checks the same number before the
@@ -48,6 +49,14 @@ function normalizeUser(chatId, raw) {
     ? raw.results.filter((entry) => entry && typeof entry === "object" &&
       typeof entry.instrument === "string" && Number.isFinite(entry.score))
     : [];
+  // A note from a hand-edited snapshot is bounded before it can be rendered.
+  user.results.forEach((entry) => {
+    if (typeof entry.note !== "string" || !entry.note.trim()) {
+      delete entry.note;
+      return;
+    }
+    entry.note = entry.note.trim().slice(0, MAX_NOTE_LENGTH);
+  });
   return user;
 }
 
@@ -133,6 +142,7 @@ export class Store {
     this.touch();
   }
 
+  // Returns the stored object so a caller can annotate it later.
   addResult(chatId, result) {
     const user = this.user(chatId);
     user.results.push(result);
@@ -140,7 +150,24 @@ export class Store {
       user.results.splice(0, user.results.length - MAX_RESULTS_PER_USER);
     }
     this.touch();
-    return user.results.length;
+    return result;
+  }
+
+  // Attaches the free-text weekly note to an already stored result. The result
+  // must still be in this user's history: trimming or /delete in between means
+  // there is nothing to annotate, and the note is dropped rather than revived.
+  annotateResult(chatId, result, note) {
+    if (!this.users.has(Number(chatId))) return null;
+    const user = this.user(chatId);
+    if (user.results.indexOf(result) === -1) return null;
+    const text = String(note === null || note === undefined ? "" : note).trim();
+    if (!text) {
+      delete result.note;
+    } else {
+      result.note = text.length > MAX_NOTE_LENGTH ? text.slice(0, MAX_NOTE_LENGTH) : text;
+    }
+    this.touch();
+    return result;
   }
 
   // Newest first, optionally narrowed to one instrument.

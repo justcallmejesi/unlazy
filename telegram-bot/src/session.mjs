@@ -1,14 +1,20 @@
-// Active questionnaire sessions. Zero dependencies. Node 16+.
+// Active questionnaire sessions and pending weekly notes. Zero dependencies.
+// Node 16+.
 //
 // Sessions live only in memory: an interrupted run is restarted rather than
 // resumed, so a partially answered questionnaire can never be scored. Session
 // ids are short because they travel inside Telegram's 64-byte callback_data.
+//
+// A pending note is the state after the last question: the result is already
+// scored and stored, and the next free-text message is attached to it. Losing
+// this state to a restart costs the note, never the result.
 
 const SESSION_ID_RADIX = 36;
 
 export class SessionManager {
   constructor(options = {}) {
     this.byChat = new Map();
+    this.notesByChat = new Map();
     this.counter = 0;
     this.idleTimeoutMs = options.idleTimeoutMs === undefined ? 60 * 60 * 1000 : Number(options.idleTimeoutMs);
   }
@@ -73,7 +79,39 @@ export class SessionManager {
     return { status: "recorded", session, done };
   }
 
+  // `result` is the object the store returned, so the note can be attached to
+  // exactly that entry even after further runs.
+  expectNote(chatId, instrumentId, result, nowMs) {
+    const pending = {
+      id: this.nextId(),
+      chatId: Number(chatId),
+      instrumentId,
+      result,
+      askedAt: nowMs === undefined ? Date.now() : nowMs,
+    };
+    this.notesByChat.set(pending.chatId, pending);
+    return pending;
+  }
+
+  pendingNote(chatId, nowMs) {
+    const pending = this.notesByChat.get(Number(chatId));
+    if (!pending) return null;
+    if (nowMs !== undefined && this.idleTimeoutMs > 0 && nowMs - pending.askedAt > this.idleTimeoutMs) {
+      this.notesByChat.delete(pending.chatId);
+      return null;
+    }
+    return pending;
+  }
+
+  clearNote(chatId) {
+    return this.notesByChat.delete(Number(chatId));
+  }
+
   size() {
     return this.byChat.size;
+  }
+
+  pendingNoteCount() {
+    return this.notesByChat.size;
   }
 }

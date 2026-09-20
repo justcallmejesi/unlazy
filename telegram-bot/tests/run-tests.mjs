@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { GAD7, PHQ9, buildResult, scoreAnswers, severityOf, riskFlagged } from "../src/instruments.mjs";
-import { Store, MAX_RESULTS_PER_USER } from "../src/store.mjs";
+import { Store, MAX_NOTE_LENGTH, MAX_RESULTS_PER_USER } from "../src/store.mjs";
 import { SessionManager } from "../src/session.mjs";
 import {
   DAY_MS, WEEK_MS, dueReminders, formatLocalDateTime, formatUtcOffset, lastDueBefore,
@@ -69,6 +69,9 @@ const textsOf = (actions) => actions
   .filter((action) => action.payload && typeof action.payload.text === "string")
   .map((action) => action.payload.text);
 const lastText = (actions) => textsOf(actions)[textsOf(actions).length - 1];
+// A finished run sends the score and then the open question, so a test that
+// means the score says so.
+const scoreText = (actions) => textsOf(actions).find((text) => text.indexOf("Бали:") !== -1);
 const methodsOf = (actions) => actions.map((action) => action.method);
 
 // Answer every question of an instrument through the inline keyboard.
@@ -470,7 +473,7 @@ test("router: /start greets, registers the user, and offers both instruments", (
 test("router: a full GAD-7 run through the keyboard scores and stores the result", () => {
   const h = harness();
   const finished = completeViaKeyboard(h, GAD7, [1, 2, 1, 2, 1, 2, 1]);
-  const text = lastText(finished);
+  const text = scoreText(finished);
   assert.match(text, /Бали: <b>10<\/b> з 21/);
   assert.match(text, /помірна тривога/);
   assert.match(text, /вище порогу 10/);
@@ -529,7 +532,7 @@ test("router: PHQ-9 asks the unscored impairment item and shows the support bloc
   const started = h.say("/phq9");
   assert.match(started[0].payload.text, /Питань: 10/);
   const finished = completeViaKeyboard(h, PHQ9, [2, 2, 2, 2, 2, 2, 2, 2, 1, 3]);
-  const text = lastText(finished);
+  const text = scoreText(finished);
   assert.match(text, /Бали: <b>17<\/b> з 27/);
   assert.match(text, /Вплив на життя: надзвичайно ускладнювали/);
   assert.match(text, /не залишайтеся з цим наодинці/);
@@ -542,7 +545,7 @@ test("router: PHQ-9 asks the unscored impairment item and shows the support bloc
 test("router: a calm PHQ-9 result omits the support block", () => {
   const h = harness();
   const finished = completeViaKeyboard(h, PHQ9, [0, 1, 0, 1, 0, 0, 1, 0, 0, 0]);
-  const text = lastText(finished);
+  const text = scoreText(finished);
   assert.match(text, /Бали: <b>3<\/b> з 27/);
   assert.match(text, /нижче порогу 10/);
   assert.doesNotMatch(text, /наодинці/);
@@ -553,11 +556,153 @@ test("router: a second run reports the change from the previous score", () => {
   completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
   h.clock.now += WEEK_MS;
   const second = completeViaKeyboard(h, GAD7, [0, 0, 0, 0, 0, 0, 0]);
-  assert.match(lastText(second), /Динаміка: -7 до минулого разу/);
+  assert.match(scoreText(second), /Динаміка: -7 до минулого разу/);
   h.clock.now += WEEK_MS;
   const third = completeViaKeyboard(h, GAD7, [0, 0, 0, 0, 0, 0, 0]);
-  assert.match(lastText(third), /Динаміка: без змін/);
+  assert.match(scoreText(third), /Динаміка: без змін/);
   assert.equal(h.store.history(777, "gad7").length, 3);
+});
+
+test("note: the open question follows the score and the answer is attached to it", () => {
+  const h = harness();
+  const finished = completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
+  assert.match(lastText(finished), /Яким був цей тиждень/);
+  const skip = finished[finished.length - 1].payload.reply_markup.inline_keyboard[0][0];
+  assert.match(skip.callback_data, /^n\|[a-z0-9]+\|skip$/);
+  assert.ok(Buffer.byteLength(skip.callback_data, "utf8") <= 64);
+  // The score is stored before the question is asked.
+  assert.equal(h.store.lastResult(777, "gad7").score, 7);
+  assert.equal(h.sessions.pendingNoteCount(), 1);
+
+  const saved = h.say("Важкий тиждень, погано спав і багато дедлайнів");
+  assert.match(lastText(saved), /опис збережено/);
+  assert.equal(h.store.lastResult(777, "gad7").note, "Важкий тиждень, погано спав і багато дедлайнів");
+  assert.equal(h.sessions.pendingNoteCount(), 0);
+  // Ordinary text after the prompt is answered is a hint again.
+  assert.match(lastText(h.say("ще щось")), /Не зрозумів команду/);
+  assert.equal(h.store.lastResult(777, "gad7").note, "Важкий тиждень, погано спав і багато дедлайнів");
+});
+
+test("note: skipping keeps the result and records nothing", () => {
+  const h = harness();
+  const finished = completeViaKeyboard(h, PHQ9, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  const pendingId = finished[finished.length - 1].payload.reply_markup.inline_keyboard[0][0]
+    .callback_data.split("|")[1];
+  const skipped = h.tap("n|" + pendingId + "|skip");
+  assert.deepEqual(methodsOf(skipped), ["answerCallbackQuery", "sendMessage"]);
+  assert.match(lastText(skipped), /без опису/);
+  assert.equal(h.store.lastResult(777, "phq9").score, 0);
+  assert.equal(h.store.lastResult(777, "phq9").note, undefined);
+  assert.equal(h.sessions.pendingNoteCount(), 0);
+  // A stale skip tap is acknowledged and does nothing.
+  assert.deepEqual(methodsOf(h.tap("n|" + pendingId + "|skip")), ["answerCallbackQuery"]);
+});
+
+test("note: /cancel and a new run drop the prompt without touching the result", () => {
+  const h = harness();
+  completeViaKeyboard(h, GAD7, [2, 2, 2, 2, 2, 2, 2]);
+  assert.match(lastText(h.say("/cancel")), /без опису/);
+  assert.equal(h.sessions.pendingNoteCount(), 0);
+  assert.equal(h.store.lastResult(777, "gad7").score, 14);
+
+  completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
+  h.say("/phq9");
+  assert.equal(h.sessions.pendingNoteCount(), 0, "starting a questionnaire drops the prompt");
+  h.say("це не опис, а відповідь на питання");
+  assert.equal(h.store.lastResult(777, "gad7").note, undefined);
+});
+
+test("note: reading commands leave the prompt open", () => {
+  const h = harness();
+  completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
+  h.say("/results");
+  assert.equal(h.sessions.pendingNoteCount(), 1);
+  h.say("тиждень був спокійний");
+  assert.equal(h.store.lastResult(777, "gad7").note, "тиждень був спокійний");
+});
+
+test("note: an over-long note is truncated and markup in it is escaped", () => {
+  const h = harness();
+  completeViaKeyboard(h, GAD7, [0, 0, 0, 0, 0, 0, 0]);
+  const saved = h.say("я".repeat(MAX_NOTE_LENGTH + 500));
+  assert.equal(h.store.lastResult(777, "gad7").note.length, MAX_NOTE_LENGTH);
+  assert.match(lastText(saved), /перші 1000 символів/);
+
+  const other = harness();
+  completeViaKeyboard(other, GAD7, [0, 0, 0, 0, 0, 0, 0]);
+  other.say("<b>стало</b> & краще");
+  assert.equal(other.store.lastResult(777, "gad7").note, "<b>стало</b> & краще");
+  const shown = lastText(other.say("/last"));
+  assert.match(shown, /&lt;b&gt;стало&lt;\/b&gt; &amp; краще/);
+  assert.doesNotMatch(shown, /<b>стало<\/b>/);
+});
+
+test("note: blank input is not a note and an empty note is dropped", () => {
+  const h = harness();
+  completeViaKeyboard(h, GAD7, [0, 0, 0, 0, 0, 0, 0]);
+  assert.deepEqual(h.say("   "), [], "whitespace is neither a note nor a hint");
+  assert.equal(h.sessions.pendingNoteCount(), 1, "the prompt stays open");
+  h.say("норм");
+  assert.equal(h.store.lastResult(777, "gad7").note, "норм");
+});
+
+test("note: history shows a snippet, /last shows it in full, /export includes it", () => {
+  const h = harness();
+  completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
+  const long = "Спочатку було важко через переїзд, потім стало легше, бо почав гуляти щодня і нормально спати";
+  h.say(long);
+  const history = lastText(h.say("/results"));
+  assert.match(history, /<i>Спочатку було важко/);
+  assert.match(history, /\.\.\.<\/i>/, "the list carries a snippet, not the whole note");
+  assert.match(lastText(h.say("/last")), new RegExp(long.slice(0, 40)));
+  assert.match(lastText(h.say("/export")), /Спочатку було важко/);
+});
+
+test("note: a result that no longer exists cannot be annotated", () => {
+  const h = harness();
+  completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
+  h.store.forget(777);
+  const answered = h.say("тиждень нормальний");
+  assert.match(lastText(answered), /без опису/);
+  assert.equal(h.store.history(777).length, 0);
+});
+
+test("note: the prompt expires with the session idle timeout", () => {
+  const h = harness({ config: { sessionIdleTimeoutMs: 1000 } });
+  completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
+  h.clock.now += 2000;
+  assert.match(lastText(h.say("пізній опис")), /Не зрозумів команду/);
+  assert.equal(h.store.lastResult(777, "gad7").note, undefined);
+});
+
+test("note: a snapshot round-trips the note and bounds a hand-edited one", () => {
+  const file = join(DIR, "notes.json");
+  const first = new Store({ file, writeDelayMs: 1e9 });
+  const stored = first.addResult(21, buildResult(GAD7, [1, 1, 1, 1, 1, 1, 1], WED_NOON_UTC));
+  assert.equal(first.annotateResult(21, stored, "  тиждень зі стресом  "), stored);
+  assert.equal(stored.note, "тиждень зі стресом", "the note is trimmed");
+  assert.equal(first.annotateResult(21, stored, "   "), stored);
+  assert.equal(stored.note, undefined, "a blank note removes the field");
+  first.annotateResult(21, stored, "фінальний опис");
+  first.flush();
+
+  const second = new Store({ file });
+  second.load();
+  assert.equal(second.lastResult(21, "gad7").note, "фінальний опис");
+  assert.equal(second.annotateResult(21, { instrument: "gad7", score: 1 }, "чужий"), null,
+    "a result that is not in this history cannot be annotated");
+
+  const hand = join(DIR, "hand-note.json");
+  writeFileSync(hand, JSON.stringify({
+    version: 1,
+    users: { "22": { results: [{ instrument: "gad7", score: 3, note: "x".repeat(MAX_NOTE_LENGTH + 40) },
+      { instrument: "gad7", score: 4, note: "   " }] } },
+  }));
+  const third = new Store({ file: hand });
+  third.load();
+  const entries = third.history(22).reverse();
+  assert.equal(entries[0].note.length, MAX_NOTE_LENGTH);
+  assert.equal(entries[1].note, undefined);
 });
 
 test("router: /cancel drops an unfinished run and stores nothing", () => {

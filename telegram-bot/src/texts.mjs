@@ -6,6 +6,7 @@
 import { escapeHtml } from "./telegram.mjs";
 import { INSTRUMENT_LIST, getInstrument, severityOf } from "./instruments.mjs";
 import { formatLocalDateTime, formatTimeOfDay, formatUtcOffset } from "./reminders.mjs";
+import { MAX_NOTE_LENGTH } from "./store.mjs";
 
 export const DISCLAIMER =
   "Опитувальники GAD-7 і PHQ-9 це інструменти самоспостереження, а не діагноз. " +
@@ -154,6 +155,42 @@ function describe(instrument, entry) {
   return { maxScore, severity };
 }
 
+// The one open question, asked after the scored items. It is not scored and
+// exists so a number has a story next to it a month later.
+export function noteQuestion() {
+  return [
+    "<b>І останнє, вільними словами</b>",
+    "",
+    "Яким був цей тиждень? Що впливало на стан, що допомагало, а що виснажувало.",
+    "Кілька речень достатньо, можна й одне.",
+    "",
+    "Це не оцінюється і на бали не впливає. Саме ці рядки через місяць пояснять, чому бал був таким.",
+    "",
+    "Напишіть відповідь одним повідомленням або натисніть «Пропустити».",
+  ].join("\n");
+}
+
+export function noteKeyboard(pendingId) {
+  return { inline_keyboard: [[{ text: "Пропустити", callback_data: "n|" + pendingId + "|skip" }]] };
+}
+
+export function noteSaved(note) {
+  const shortened = note.length >= MAX_NOTE_LENGTH
+    ? "\n\nЗапис довгий, тому збережені перші " + MAX_NOTE_LENGTH + " символів."
+    : "";
+  return "Записав, опис збережено разом із результатом. Побачити його знову: /results" + shortened;
+}
+
+export function noteSkipped() {
+  return "Гаразд, без опису. Результат уже збережено.";
+}
+
+// One line for a list, never the whole note.
+function noteSnippet(note, limit = 90) {
+  const flat = note.replace(/\s+/g, " ").trim();
+  return escapeHtml(flat.length > limit ? flat.slice(0, limit) + "..." : flat);
+}
+
 export function historyMessage(store, chatId, offsetMinutes, limit = 10) {
   const sections = INSTRUMENT_LIST.map((instrument) => {
     const entries = store.history(chatId, instrument.id, limit);
@@ -163,8 +200,9 @@ export function historyMessage(store, chatId, offsetMinutes, limit = 10) {
     const rows = entries.map((entry) => {
       const stamp = formatLocalDateTime(Date.parse(entry.completedAt), offsetMinutes);
       const shape = describe(instrument, entry);
-      return "• " + stamp + " : <b>" + entry.score + "</b>/" + shape.maxScore +
+      const row = "• " + stamp + " : <b>" + entry.score + "</b>/" + shape.maxScore +
         " " + escapeHtml(shape.severity);
+      return entry.note ? row + "\n  <i>" + noteSnippet(entry.note) + "</i>" : row;
     });
     const total = store.history(chatId, instrument.id).length;
     const shown = total > entries.length ? "\nпоказані останні " + entries.length + " з " + total : "";
@@ -178,8 +216,9 @@ export function lastMessage(store, chatId, offsetMinutes) {
     const entry = store.lastResult(chatId, instrument.id);
     if (!entry) return "<b>" + escapeHtml(instrument.title) + "</b>: немає даних";
     const shape = describe(instrument, entry);
-    return "<b>" + escapeHtml(instrument.title) + "</b>: " + entry.score + "/" + shape.maxScore +
+    const head = "<b>" + escapeHtml(instrument.title) + "</b>: " + entry.score + "/" + shape.maxScore +
       " " + escapeHtml(shape.severity) + ", " + formatLocalDateTime(Date.parse(entry.completedAt), offsetMinutes);
+    return entry.note ? head + "\n<i>" + escapeHtml(entry.note) + "</i>" : head;
   });
   return ["<b>Останні результати</b>", ""].concat(rows).join("\n");
 }

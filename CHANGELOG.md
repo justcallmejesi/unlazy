@@ -6,6 +6,8 @@ This section describes the current source tree. It does not claim that `2.1.0` h
 
 ### Telegram screening bot
 
+- Ask one open question after the scored items: describe the week in your own words. The score is stored before the question is asked, so skipping it, ignoring it, or losing the prompt to a restart never costs the result; the note is attached to the already stored entry. A skip button, a 1000 character bound, HTML escaping on display, a snippet in `/results` and the full text in `/last`, inclusion in `/export`, and removal with `/delete`. Reading commands leave the question open while starting a run, `/cancel` and `/delete` close it.
+
 - Localize the bot for Ukraine. All user-facing text is Ukrainian: questionnaire items, answer options, severity bands, every command reply, and the reminder. The support block now lists Ukrainian services (103 and 112, LifeLine Ukraine 7333, the national children's line 116 111, howareu.com) with each number verified against the operator's own page and cited in the bot README. The default reminder offset documents Kyiv time as UTC+2 in winter and UTC+3 in summer.
 - Record repository-wide owner context in `CLAUDE.md`, including the Ukrainian locale defaults and the files that carry locale-bearing values.
 
