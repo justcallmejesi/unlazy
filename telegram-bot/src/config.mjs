@@ -12,6 +12,8 @@ const TOKEN_SHAPE = /^\d{6,}:[A-Za-z0-9_-]{30,}$/;
 // sources listed in telegram-bot/README.md. Override with CRISIS_CONTACT for
 // another country.
 export const DEFAULT_CONTACT_USERNAME = "justajsi";
+export const DEFAULT_CONTACT_NAME = "Олексій";
+export const DEFAULT_CONTACT_ROLE = "психолог";
 
 export const DEFAULT_CRISIS_CONTACT = [
   "Куди можна звернутися:",
@@ -134,8 +136,10 @@ export function loadConfig(env = process.env, options = {}) {
     // switches the whole offer off.
     contact: {
       username: contactUsername,
-      name: String(env.CONTACT_NAME || "").trim(),
-      role: String(env.CONTACT_ROLE || "").trim(),
+      // Both fall back to the owner's details and both accept an explicit
+      // empty value, which drops that part of the wording.
+      name: String(env.CONTACT_NAME === undefined ? DEFAULT_CONTACT_NAME : env.CONTACT_NAME).trim(),
+      role: String(env.CONTACT_ROLE === undefined ? DEFAULT_CONTACT_ROLE : env.CONTACT_ROLE).trim(),
     },
     price: {
       // Stars, not a minor currency unit. 100 Stars is roughly 100 UAH for the

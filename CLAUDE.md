@@ -57,8 +57,11 @@ license a real instrument.
 
 Above a cutoff, or when the PHQ-9 risk item is marked, the bot offers a
 prefilled `t.me/<CONTACT_USERNAME>?text=` draft naming the person's scores.
-`CONTACT_USERNAME` defaults to the owner's account, `justajsi`; an explicitly
-empty value switches the offer off.
+`CONTACT_USERNAME` defaults to the owner's account, `justajsi`, with
+`CONTACT_NAME` "Олексій" and `CONTACT_ROLE` "психолог"; an explicitly empty
+username switches the offer off, and an empty name or role just drops that part
+of the wording. The role is a credential shown to someone who has just scored
+above a cutoff, so it has to stay accurate.
 Telegram never sends it; the person does. Emergency services always appear
 before the personal contact, and `/contact` stays free.
 

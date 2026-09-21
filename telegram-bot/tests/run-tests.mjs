@@ -1426,6 +1426,34 @@ test("contact: with no username configured nothing is offered", () => {
   assert.match(lastText(h.say("/contact")), /не налаштований/);
 });
 
+test("contact: the name and role default to the owner's details", () => {
+  const config = loadConfig({ BOT_TOKEN: FAKE_TOKEN }, { envFile: false });
+  assert.deepEqual(config.contact, { username: "justajsi", name: "Олексій", role: "психолог" });
+  // Each part can be dropped on its own without switching the offer off.
+  const nameless = loadConfig({ BOT_TOKEN: FAKE_TOKEN, CONTACT_NAME: "" }, { envFile: false });
+  assert.equal(nameless.contact.name, "");
+  assert.equal(nameless.contact.username, "justajsi");
+  const roleless = loadConfig({ BOT_TOKEN: FAKE_TOKEN, CONTACT_ROLE: "" }, { envFile: false });
+  assert.equal(roleless.contact.role, "");
+  assert.equal(loadConfig({ BOT_TOKEN: FAKE_TOKEN, CONTACT_ROLE: "коуч" }, { envFile: false }).contact.role,
+    "коуч");
+});
+
+test("contact: the offer never has to decline the name", () => {
+  const h = harness({ config: { contact: { username: "justajsi", name: "Олексій", role: "психолог" } } });
+  h.say("/start");
+  const finished = completeViaKeyboard(h, GAD7, [2, 2, 2, 2, 2, 2, 2]);
+  const offer = textsOf(finished).find((text) => text.indexOf("Можна не розбиратися") !== -1);
+  // "напишіть Олексій" would be the wrong case, so the name follows a colon.
+  assert.match(offer, /ось контакт: Олексій \(психолог\)/);
+  assert.doesNotMatch(offer, /напишіть Олексій/);
+  const button = finished.find((action) => {
+    const rows = action.payload && action.payload.reply_markup && action.payload.reply_markup.inline_keyboard;
+    return Array.isArray(rows) && rows.length && rows[0].length && rows[0][0].url;
+  });
+  assert.equal(button.payload.reply_markup.inline_keyboard[0][0].text, "Написати: Олексій");
+});
+
 test("contact: the username defaults to the owner's account and is validated", () => {
   const good = loadConfig({ BOT_TOKEN: FAKE_TOKEN, CONTACT_USERNAME: "@helper_psy" }, { envFile: false });
   assert.equal(good.contact.username, "helper_psy", "a leading at sign is stripped");

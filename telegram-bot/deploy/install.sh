@@ -104,8 +104,8 @@ TRIAL_DAYS=14
 # Account for the help offer shown above the cutoff, no at sign. Defaults to
 # justajsi in the code; set it empty here to switch the offer off.
 CONTACT_USERNAME=justajsi
-CONTACT_NAME=
-CONTACT_ROLE=
+CONTACT_NAME=Олексій
+CONTACT_ROLE=психолог
 
 # Off-machine backup target for scp, for example user@host:/backups/gad7
 BACKUP_REMOTE=

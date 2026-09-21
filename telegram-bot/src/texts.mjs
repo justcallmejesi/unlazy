@@ -221,7 +221,10 @@ export function helpOffer(contact, requestText) {
   return [
     "<b>Можна не розбиратися з цим самому</b>",
     "",
-    "Якщо хочете обговорити ці результати з людиною, напишіть " + escapeHtml(who) + escapeHtml(role) + ".",
+    // Phrased with a colon so the name never needs declining: "напишіть
+    // Олексій" is the wrong case, and the bot cannot decline arbitrary names.
+    "Якщо хочете обговорити ці результати з живою людиною, ось контакт: " +
+      escapeHtml(who) + escapeHtml(role) + ".",
     "Кнопка нижче відкриє чат із уже готовим повідомленням: Ви побачите текст, зможете його змінити і надішлете самі.",
     "",
     "Текст, якщо зручніше скопіювати:",
