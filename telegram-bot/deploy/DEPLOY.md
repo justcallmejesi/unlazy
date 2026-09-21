@@ -19,19 +19,34 @@ node --version                                                       # будь-
 
 Node може бути відсутнім: установник поставить Node 22 LTS сам, бо в apt Ubuntu 24.04 лежить Node 18, у якого підтримка вже завершилася.
 
-## Крок 2. Встановіть
+## Крок 2. Закрийте свіжий сервер
+
+Провайдер видає сервер з root-паролем, який ходив листом. Дві хвилини роботи, перш ніж на ньому з'являться дані про здоров'я:
 
 ```text
-sudo apt update && sudo apt install -y git curl
+passwd                                    # свій пароль замість виданого
+apt update && apt install -y ufw unattended-upgrades
+ufw allow 22/tcp                          # спочатку дозволити SSH
+ufw --force enable                        # і лише потім увімкнути
+```
+
+Порядок важливий: `ufw enable` без дозволеного 22 порту відрізає вас від сервера. Боту вхідні порти не потрібні взагалі, він сам ходить до Telegram, тому відкритим лишається тільки SSH.
+
+## Крок 3. Встановіть
+
+```text
+apt install -y git curl
 git clone https://github.com/justcallmejesi/unlazy.git
 cd unlazy
 git checkout claude/telegram-gad7-phq9-bot-imgb30
-sudo bash telegram-bot/deploy/install.sh
+bash telegram-bot/deploy/install.sh
 ```
+
+Якщо репозиторій приватний, `git clone` попросить логін. Пароль GitHub там не працює, потрібен personal access token: GitHub → Settings → Developer settings → Personal access tokens → створіть token з доступом до репозиторію і вставте його замість пароля. Альтернатива: зробити репозиторій публічним. Секретів у коді немає, токен бота живе лише в `.env`, який у `.gitignore`.
 
 Установник перевіряє зв'язок з Telegram, ставить Node за потреби, створює користувача `gad7bot`, копіює код у `/opt/gad7-phq9-bot`, готує файл з налаштуваннями, проганяє тести і вмикає сервіс разом із щоденним бекапом. Запускати повторно безпечно: так само робиться оновлення.
 
-## Крок 3. Впишіть токен і запустіть
+## Крок 4. Впишіть токен і запустіть
 
 ```text
 sudo nano /etc/gad7-phq9-bot.env      # BOT_TOKEN=123456789:...
@@ -41,7 +56,7 @@ journalctl -u gad7-phq9-bot -f
 
 У логі має з'явитися `authorized as @ваш_бот`, далі `polling for updates`. Напишіть боту `/start` в особистому чаті.
 
-## Крок 4. Застосунок у вікні
+## Крок 5. Застосунок у вікні
 
 Вікно це статична сторінка, їй потрібен лише хостинг по https. На Cloudflare Pages це безкоштовно:
 
