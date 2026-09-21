@@ -323,7 +323,7 @@ git clone https://github.com/justcallmejesi/unlazy.git && cd unlazy
 sudo bash telegram-bot/deploy/install.sh
 ```
 
-Установник перевіряє доступність `api.telegram.org`, ставить Node 22 LTS, якщо системний старіший за 18, створює користувача `gad7bot`, кладе код у `/opt/gad7-phq9-bot`, а токен у `/etc/gad7-phq9-bot.env` з правами `0600`. Результати живуть у `/var/lib/gad7-phq9-bot/`, окремо від коду, тому `git pull` їх не торкається. Повторний запуск установника це оновлення.
+Установник перевіряє доступність `api.telegram.org`, ставить Node 22 LTS, якщо системний старіший за 18, створює користувача `gad7bot`, кладе код у `/opt/gad7-phq9-bot`, а токен у `/etc/gad7-phq9-bot.env` з правами `0600`. Git йому не потрібен, тому сервер без IPv4 теж підходить: код копіюється через `scp`, подробиці в [deploy/DEPLOY.md](deploy/DEPLOY.md). Результати живуть у `/var/lib/gad7-phq9-bot/`, окремо від коду, тому `git pull` їх не торкається. Повторний запуск установника це оновлення.
 
 Подробиці, бекап на інший хост, обслуговування і діагностика: [deploy/DEPLOY.md](deploy/DEPLOY.md).
 
