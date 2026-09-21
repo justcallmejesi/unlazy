@@ -1,0 +1,47 @@
+# systemd unit for the GAD-7 and PHQ-9 bot. Ubuntu 24.04 LTS or Debian 12.
+# Installed to /etc/systemd/system/gad7-phq9-bot.service by install.sh.
+
+[Unit]
+Description=GAD-7 and PHQ-9 Telegram screening bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gad7bot
+Group=gad7bot
+WorkingDirectory=/opt/gad7-phq9-bot
+ExecStart=/usr/bin/node /opt/gad7-phq9-bot/telegram-bot/bot.mjs
+# The token lives here, 0600 and owned by root, never in the unit or the repo.
+EnvironmentFile=/etc/gad7-phq9-bot.env
+Restart=always
+RestartSec=5
+# Results live outside the checkout, so a git pull can never touch them.
+# Creates /var/lib/gad7-phq9-bot owned by the service user.
+StateDirectory=gad7-phq9-bot
+StateDirectoryMode=0700
+
+# The bot needs outbound https and its own state directory. Nothing else.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectProc=invisible
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectClock=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+UMask=0077
+# Deliberately left off: V8 needs writable executable memory for its JIT, so
+# MemoryDenyWriteExecute=yes would stop Node from starting at all.
+
+[Install]
+WantedBy=multi-user.target

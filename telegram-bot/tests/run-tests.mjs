@@ -9,6 +9,7 @@
 
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1044,6 +1045,46 @@ test("webapp: WEBAPP_URL must be https", () => {
     /must be an https URL/);
   assert.throws(() => loadConfig({ BOT_TOKEN: FAKE_TOKEN, WEBAPP_URL: "example.com" }, { envFile: false }),
     /must be an https URL/);
+});
+
+// --------------------------------------------------------------- deployment
+
+test("deploy: the shell scripts parse", () => {
+  const dir = join(dirname(fileURLToPath(import.meta.url)), "..", "deploy");
+  ["install.sh", "backup.sh"].forEach((name) => {
+    const result = spawnSync("bash", ["-n", join(dir, name)], { encoding: "utf8" });
+    assert.equal(result.status, 0, name + ": " + (result.stderr || ""));
+  });
+});
+
+test("deploy: the unit, the installer and the guide agree on every path", () => {
+  const dir = join(dirname(fileURLToPath(import.meta.url)), "..", "deploy");
+  const unit = readFileSync(join(dir, "gad7-phq9-bot.service"), "utf8");
+  const installer = readFileSync(join(dir, "install.sh"), "utf8");
+  const backup = readFileSync(join(dir, "backup.sh"), "utf8");
+  const guide = readFileSync(join(dir, "DEPLOY.md"), "utf8");
+
+  // A path that drifts between these files leaves a service that starts
+  // nothing, or a backup that copies the wrong file.
+  const appDir = "/opt/gad7-phq9-bot";
+  const envFile = "/etc/gad7-phq9-bot.env";
+  const stateDir = "/var/lib/gad7-phq9-bot";
+  assert.match(unit, new RegExp("ExecStart=/usr/bin/node " + appDir + "/telegram-bot/bot\\.mjs"));
+  assert.match(unit, new RegExp("EnvironmentFile=" + envFile));
+  assert.match(unit, /StateDirectory=gad7-phq9-bot/);
+  assert.match(installer, new RegExp("APP_DIR=" + appDir));
+  assert.match(installer, new RegExp("ENV_FILE=" + envFile));
+  assert.match(backup, new RegExp("DATA_FILE:-" + stateDir + "/results\\.json"));
+  assert.match(guide, new RegExp(envFile.replace(/\//g, "/")));
+
+  // The env template must name the variables the bot actually reads.
+  ["BOT_TOKEN", "DATA_FILE", "REMINDER_TIME", "REMINDER_UTC_OFFSET", "WEBAPP_URL"].forEach((key) => {
+    assert.match(installer, new RegExp("^" + key + "=", "m"), key + " missing from the env template");
+  });
+  // V8 needs writable executable memory, so this hardening switch must stay off.
+  assert.doesNotMatch(unit, /^MemoryDenyWriteExecute=yes/m);
+  assert.match(unit, /ProtectSystem=strict/);
+  assert.match(unit, /User=gad7bot/);
 });
 
 // --------------------------------------------------------------- telegram client

@@ -1,0 +1,18 @@
+# Daily snapshot copy. Paired with gad7-phq9-backup.timer.
+
+[Unit]
+Description=Back up the GAD-7 and PHQ-9 results snapshot
+After=gad7-phq9-bot.service
+
+[Service]
+Type=oneshot
+User=gad7bot
+Group=gad7bot
+ExecStart=/opt/gad7-phq9-bot/telegram-bot/deploy/backup.sh
+EnvironmentFile=-/etc/gad7-phq9-bot.env
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/gad7-phq9-bot
+NoNewPrivileges=yes
+UMask=0077

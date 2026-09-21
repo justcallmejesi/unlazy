@@ -1,0 +1,103 @@
+# Розгортання на VPS з Ubuntu 24.04 LTS
+
+Перевірено для Ubuntu 24.04 LTS і Debian 12. Потрібні: VPS з root-доступом, токен від [@BotFather](https://t.me/BotFather), близько десяти хвилин.
+
+Бот працює як `systemd`-сервіс під окремим непривілейованим користувачем. Результати лежать у `/var/lib/gad7-phq9-bot/`, окремо від коду, тому оновлення коду ніколи не торкається даних. Токен лежить у `/etc/gad7-phq9-bot.env` з правами `0600` і не потрапляє ні в репозиторій, ні в лог.
+
+## Крок 1. Перевірте сервер до оплати
+
+Якщо хостинг дає безкоштовний тест, це найважливіші чотири команди. Без доступу до Telegram бот там не запрацює, і краще дізнатися це до оплати року.
+
+```text
+curl -sS -o /dev/null -w "%{http_code}\n" https://api.telegram.org   # чекаємо 404
+systemd-detect-virt                                                  # чекаємо kvm
+systemctl --version                                                  # systemd має бути
+node --version                                                       # будь-яка або відсутня
+```
+
+`404` від Telegram це нормальна відповідь кореня API, вона доводить, що зв'язок є. Таймаут або помилка з'єднання означають, що цей хостинг не підходить. `openvz` замість `kvm` не вирок, але systemd там буває урізаний, тому дивіться уважно на запуск сервісу.
+
+Node може бути відсутнім: установник поставить Node 22 LTS сам, бо в apt Ubuntu 24.04 лежить Node 18, у якого підтримка вже завершилася.
+
+## Крок 2. Встановіть
+
+```text
+sudo apt update && sudo apt install -y git curl
+git clone https://github.com/justcallmejesi/unlazy.git
+cd unlazy
+git checkout claude/telegram-gad7-phq9-bot-imgb30
+sudo bash telegram-bot/deploy/install.sh
+```
+
+Установник перевіряє зв'язок з Telegram, ставить Node за потреби, створює користувача `gad7bot`, копіює код у `/opt/gad7-phq9-bot`, готує файл з налаштуваннями, проганяє тести і вмикає сервіс разом із щоденним бекапом. Запускати повторно безпечно: так само робиться оновлення.
+
+## Крок 3. Впишіть токен і запустіть
+
+```text
+sudo nano /etc/gad7-phq9-bot.env      # BOT_TOKEN=123456789:...
+sudo systemctl enable --now gad7-phq9-bot
+journalctl -u gad7-phq9-bot -f
+```
+
+У логі має з'явитися `authorized as @ваш_бот`, далі `polling for updates`. Напишіть боту `/start` в особистому чаті.
+
+## Крок 4. Застосунок у вікні
+
+Вікно це статична сторінка, їй потрібен лише хостинг по https. На Cloudflare Pages це безкоштовно:
+
+1. Cloudflare → Workers and Pages → Create → Pages → підключіть цей репозиторій.
+2. Branch: `claude/telegram-gad7-phq9-bot-imgb30`. Build command: **порожня**. Build output directory: `telegram-bot/webapp`.
+3. Отриману адресу виду `https://назва.pages.dev/` впишіть у `WEBAPP_URL` і перезапустіть бота:
+
+```text
+sudo nano /etc/gad7-phq9-bot.env      # WEBAPP_URL=https://назва.pages.dev/
+sudo systemctl restart gad7-phq9-bot
+journalctl -u gad7-phq9-bot -n 20     # чекаємо "Mini App enabled: ..."
+```
+
+Після цього під полем введення з'явиться кнопка «Відкрити застосунок». Без `WEBAPP_URL` бот працює тільки в чаті, і це теж робочий режим.
+
+## Бекапи
+
+`gad7-phq9-backup.timer` щодня копіює знімок у `/var/lib/gad7-phq9-bot/backups/`, тримає останні 14 копій і перед збереженням перевіряє, що файл розбирається як JSON. Копії лежать на тій самій машині, тому втрата диска це втрата всього. Задайте `BACKUP_REMOTE` у `/etc/gad7-phq9-bot.env`, щоб остання копія йшла ще й на інший хост:
+
+```text
+BACKUP_REMOTE=user@host:/backups/gad7-phq9
+```
+
+Для цього потрібен ключ SSH без пароля у користувача `gad7bot`. Перевірити таймер і зробити копію просто зараз:
+
+```text
+systemctl list-timers gad7-phq9-backup
+sudo systemctl start gad7-phq9-backup.service
+journalctl -u gad7-phq9-backup -n 20
+```
+
+## Обслуговування
+
+| Задача | Команда |
+| --- | --- |
+| подивитися лог | `journalctl -u gad7-phq9-bot -f` |
+| перезапустити | `sudo systemctl restart gad7-phq9-bot` |
+| оновити код | `cd ~/unlazy && git pull && sudo bash telegram-bot/deploy/install.sh` |
+| змінити налаштування | `sudo nano /etc/gad7-phq9-bot.env`, потім `restart` |
+| подивитися дані | `sudo ls -la /var/lib/gad7-phq9-bot/` |
+
+Двічі на рік, останньої неділі березня і жовтня, поправте `REMINDER_UTC_OFFSET` на `+3` або `+2`: планувальник працює на фіксованих зсувах. Або нічого не робіть, і тоді нагадування приїде на годину раніше чи пізніше, а кожен користувач може задати свій зсув командою `/tz`.
+
+## Якщо щось не працює
+
+| Симптом у логі | Причина |
+| --- | --- |
+| `BOT_TOKEN is not set` | порожній `BOT_TOKEN` у `/etc/gad7-phq9-bot.env` |
+| `failed with 401` | токен невірний або відкликаний, візьміть новий у BotFather |
+| `failed with 409` | бот уже запущений десь ще, один токен обслуговує один процес |
+| `getUpdates transport error` | сервер не бачить `api.telegram.org`, перевірте крок 1 |
+| `snapshot write failed` | немає прав на `/var/lib/gad7-phq9-bot`, перевірте `StateDirectory` |
+| сервіс не стартує на OpenVZ | урізаний systemd, спробуйте `systemctl status` і перейдіть на KVM |
+
+Стан сервісу одним рядком:
+
+```text
+systemctl is-active gad7-phq9-bot && journalctl -u gad7-phq9-bot -n 5 --no-pager
+```

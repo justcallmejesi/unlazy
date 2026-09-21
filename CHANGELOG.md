@@ -6,6 +6,8 @@ This section describes the current source tree. It does not claim that `2.1.0` h
 
 ### Telegram screening bot
 
+- Add `telegram-bot/deploy/`: a hardened systemd unit running under an unprivileged `gad7bot` user with the results kept in `StateDirectory` outside the checkout, an idempotent installer for Ubuntu 24.04 LTS and Debian 12 that verifies Telegram reachability and the virtualization type before anything else and installs Node 22 LTS when the system Node predates 18, a daily backup timer that validates each copy parses as JSON and can push the newest off the machine, and a step-by-step guide. A test pins that the unit, installer, backup script and guide agree on every path, and that the hardening switch V8 cannot tolerate stays off.
+
 - Add an optional Telegram Mini App at `telegram-bot/webapp/`: one full-width keyboard button opens a window over the chat carrying the questionnaires, statistics with charts, history, reminder settings and data management, and only the result is posted back to the chat. It needs static https hosting and no API of its own: results travel back through `sendData` and the statistics read Telegram CloudStorage. The bot treats the payload as untrusted, validating every field in `src/webapp.mjs` and recomputing the score from the answers rather than accepting one. Set `WEBAPP_URL` to enable it; unset, the chat flow is unchanged.
 - Keep one source of truth for the questionnaires: `webapp/instruments.mjs` is a copy of `src/instruments.mjs` refreshed by `webapp/build.mjs`, and a test fails when it is stale, so wording and bands cannot differ between window and chat.
 

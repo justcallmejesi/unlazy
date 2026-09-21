@@ -208,27 +208,18 @@ node telegram-bot/webapp/build.mjs --check  перевірити, що вона 
 
 Токен не попадає ні в логи, ні в текст помилок: клієнт вирізає його з будь-якого рядка перед виводом.
 
-## Автозапуск через systemd
+## Розгортання
 
-```ini
-[Unit]
-Description=GAD-7 and PHQ-9 Telegram bot
-After=network-online.target
+Готовий комплект лежить у [deploy/](deploy/): systemd-юніт під окремим непривілейованим користувачем, установник для Ubuntu 24.04 LTS і Debian 12, щоденний бекап знімка таймером і покрокова інструкція.
 
-[Service]
-Type=simple
-WorkingDirectory=/opt/unlazy
-ExecStart=/usr/bin/node /opt/unlazy/telegram-bot/bot.mjs
-Environment=BOT_TOKEN=123456789:ваш-токен
-Environment=DATA_FILE=/var/lib/gad7-phq9-bot/results.json
-Restart=always
-RestartSec=5
-NoNewPrivileges=yes
-PrivateTmp=yes
-
-[Install]
-WantedBy=multi-user.target
+```text
+git clone https://github.com/justcallmejesi/unlazy.git && cd unlazy
+sudo bash telegram-bot/deploy/install.sh
 ```
+
+Установник перевіряє доступність `api.telegram.org`, ставить Node 22 LTS, якщо системний старіший за 18, створює користувача `gad7bot`, кладе код у `/opt/gad7-phq9-bot`, а токен у `/etc/gad7-phq9-bot.env` з правами `0600`. Результати живуть у `/var/lib/gad7-phq9-bot/`, окремо від коду, тому `git pull` їх не торкається. Повторний запуск установника це оновлення.
+
+Подробиці, бекап на інший хост, обслуговування і діагностика: [deploy/DEPLOY.md](deploy/DEPLOY.md).
 
 Один токен обслуговується одним процесом: Telegram віддає `409 Conflict`, якщо `getUpdates` викликають з двох місць одночасно.
 
@@ -257,6 +248,7 @@ npm run test:bot
 | `src/webapp.mjs` | розбір і перевірка того, що надсилає вікно |
 | `webapp/index.html`, `webapp/app.js` | сам застосунок: екрани, графіки, локальне сховище |
 | `webapp/build.mjs` | оновлення копії питань для застосунку |
+| `deploy/` | systemd-юніти, установник, бекап і інструкція з розгортання |
 
 Роутер синхронний і не робить вводу-виводу, тому будь-яку гілку діалогу можна перевірити тестом без мережі і без живого бота.
 

@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up the results snapshot every day
+
+[Timer]
+OnCalendar=daily
+# Spread the run so it never lands exactly on a reminder tick.
+RandomizedDelaySec=30m
+Persistent=yes
+
+[Install]
+WantedBy=timers.target
