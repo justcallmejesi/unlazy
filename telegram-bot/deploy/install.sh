@@ -101,6 +101,11 @@ WEBAPP_URL=
 PRICE_STARS=100
 TRIAL_DAYS=14
 
+# Your Telegram username for the help offer shown above the cutoff, no at sign.
+CONTACT_USERNAME=
+CONTACT_NAME=
+CONTACT_ROLE=
+
 # Off-machine backup target for scp, for example user@host:/backups/gad7
 BACKUP_REMOTE=
 ENVEOF

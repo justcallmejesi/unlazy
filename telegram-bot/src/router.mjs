@@ -14,7 +14,8 @@ import {
   aboutText, answerKeyboard, appIntro, appKeyboard, appRejected, appResultSaved, exportMessage,
   greeting, helpText, historyMessage, lastMessage, noteKeyboard, noteQuestion, noteSaved,
   noteSkipped, questionText, reminderStatus, resultMessage, startKeyboard, unknownInput,
-  alreadyPro, buyKeyboard, paySupport, paywall, purchaseThanks, trialNotice, weekdayWords,
+  alreadyPro, buyKeyboard, contactUnavailable, helpKeyboard, helpOffer, helpRequestText, paySupport,
+  paywall, purchaseThanks, trialNotice, weekdayWords,
 } from "./texts.mjs";
 import { parseWebAppPayload } from "./webapp.mjs";
 
@@ -85,6 +86,17 @@ export function createRouter(context) {
     return ensureTrial(store, chatId, now(), config.price.trialDays);
   }
 
+  // Offered when a score crosses its cutoff or the risk item is marked. Free
+  // for everyone: this is a route to help, not a feature.
+  function helpActions(chatId) {
+    const contact = config.contact;
+    if (!contact || !contact.username) return [];
+    const requestText = helpRequestText(store, chatId, scheduleFor(chatId));
+    return [send(chatId, helpOffer(contact, requestText), {
+      reply_markup: helpKeyboard(contact, requestText),
+    })];
+  }
+
   function locked(chatId, state) {
     return [send(chatId, paywall(config.price, state), { reply_markup: buyKeyboard(config.price) })];
   }
@@ -125,10 +137,12 @@ export function createRouter(context) {
     const stored = store.addResult(chatId, result);
     const pending = sessions.expectNote(chatId, instrument.id, stored, now());
     const schedule = scheduleFor(chatId);
+    const needsHelp = result.aboveCutoff || result.risk;
     return [
       send(chatId, resultMessage(instrument, result, previous, schedule, config.crisisContact)),
+    ].concat(needsHelp ? helpActions(chatId) : [], [
       send(chatId, noteQuestion(), { reply_markup: noteKeyboard(pending.id) }),
-    ];
+    ]);
   }
 
   function acceptNote(chatId, text) {
@@ -250,6 +264,10 @@ export function createRouter(context) {
       }
       case "paysupport":
         return [send(chatId, paySupport(config.price))];
+      case "contact": {
+        const offer = helpActions(chatId);
+        return offer.length ? offer : [send(chatId, contactUnavailable())];
+      }
       case "cancel": {
         const hadSession = sessions.cancel(chatId);
         const hadNote = sessions.clearNote(chatId);
@@ -332,7 +350,7 @@ export function createRouter(context) {
         actions: [
           send(chatId, appResultSaved(instrument, result)),
           send(chatId, resultMessage(instrument, result, previous, schedule, config.crisisContact)),
-        ],
+        ].concat(result.aboveCutoff || result.risk ? helpActions(chatId) : []),
         payload,
       };
     }

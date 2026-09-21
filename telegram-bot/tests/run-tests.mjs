@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
 import {
-  GAD7, ISI, PHQ9, PSS10, buildResult, itemContribution, scoreAnswers, severityOf, riskFlagged,
+  GAD7, PHQ9, SLEEP, STRESS, buildResult, itemContribution, scoreAnswers, severityOf, riskFlagged,
 } from "../src/instruments.mjs";
 import {
   applyPayment, checkPreCheckout, ensureTrial, entitlement, invoiceFor, isPro,
@@ -58,6 +58,7 @@ function fixtureConfig(overrides = {}) {
     memoryOnly: true,
     dataFile: null,
     webappUrl: null,
+    contact: { username: "", name: "", role: "" },
     price: {
       stars: 100,
       trialDays: 14,
@@ -169,46 +170,48 @@ test("instruments: buildResult records score, band, cutoff, risk, and impairment
   assert.equal(calm.impairment, null);
 });
 
-test("instruments: ISI carries its own option labels per item", () => {
-  assert.equal(ISI.items.length, 7);
-  assert.equal(scoreAnswers(ISI, [4, 4, 4, 4, 4, 4, 4]), 28);
-  assert.equal(scoreAnswers(ISI, [0, 0, 0, 0, 0, 0, 0]), 0);
-  // Severity items and satisfaction items read differently to the user.
-  assert.equal(ISI.items[0].options[4].label, "Дуже серйозні");
-  assert.equal(ISI.items[3].options[0].label, "Дуже задоволений");
-  const bands = [[0, "без клінічно"], [7, "без клінічно"], [8, "підпорогове"], [14, "підпорогове"],
-    [15, "помірне"], [21, "помірне"], [22, "тяжке"], [28, "тяжке"]];
-  bands.forEach(([score, expected]) => assert.match(severityOf(ISI, score), new RegExp(expected)));
-  assert.equal(ISI.cutoff, 15);
-  assert.equal(ISI.paid, true);
+test("instruments: the sleep scale runs 0 to 28 and says what it is not", () => {
+  assert.equal(SLEEP.items.length, 7);
+  assert.equal(scoreAnswers(SLEEP, [4, 4, 4, 4, 4, 4, 4]), 28);
+  assert.equal(scoreAnswers(SLEEP, [0, 0, 0, 0, 0, 0, 0]), 0);
+  const bands = [[0, "спокійний"], [6, "спокійний"], [7, "легкі"], [13, "легкі"],
+    [14, "помірні"], [20, "помірні"], [21, "виражені"], [28, "виражені"]];
+  bands.forEach(([score, expected]) => assert.match(severityOf(SLEEP, score), new RegExp(expected)));
+  assert.equal(SLEEP.cutoff, 14);
+  assert.equal(SLEEP.paid, true);
+  // Written for this bot, so it must never present itself as a screening tool.
+  assert.match(SLEEP.caveat, /не валідований опитувальник/);
 });
 
-test("instruments: PSS-10 counts its four positive items backwards", () => {
-  assert.equal(PSS10.items.length, 10);
-  const reversed = PSS10.items.map((item, index) => (item.reverse ? index : null)).filter((x) => x !== null);
-  assert.deepEqual(reversed, [3, 4, 6, 7], "items 4, 5, 7 and 8 are the reverse-scored ones");
-  assert.equal(itemContribution(PSS10.items[0], 4), 4);
-  assert.equal(itemContribution(PSS10.items[3], 4), 0, "full confidence contributes no stress");
-  assert.equal(itemContribution(PSS10.items[3], 0), 4);
+test("instruments: the stress scale counts its two positive items backwards", () => {
+  assert.equal(STRESS.items.length, 8);
+  const reversed = STRESS.items.map((item, index) => (item.reverse ? index : null)).filter((x) => x !== null);
+  assert.deepEqual(reversed, [3, 5], "the two positively worded items");
+  assert.equal(itemContribution(STRESS.items[0], 4), 4);
+  assert.equal(itemContribution(STRESS.items[3], 4), 0, "coping contributes no strain");
+  assert.equal(itemContribution(STRESS.items[3], 0), 4);
 
-  // All zeros is not zero stress: it means never feeling in control either.
-  assert.equal(scoreAnswers(PSS10, new Array(10).fill(0)), 16);
-  assert.equal(scoreAnswers(PSS10, new Array(10).fill(4)), 24);
-  assert.equal(scoreAnswers(PSS10, new Array(10).fill(2)), 20, "the midpoint lands mid-scale");
-  assert.equal(scoreAnswers(PSS10, [0, 0, 0, 4, 4, 0, 4, 4, 0, 0]), 0, "calmest possible");
-  assert.equal(scoreAnswers(PSS10, [4, 4, 4, 0, 0, 4, 0, 0, 4, 4]), 40, "most stressed possible");
+  // Agreeing with everything cannot max the score, which is the point.
+  assert.equal(scoreAnswers(STRESS, new Array(8).fill(4)), 24);
+  assert.equal(scoreAnswers(STRESS, new Array(8).fill(0)), 8);
+  assert.equal(scoreAnswers(STRESS, [0, 0, 0, 4, 0, 4, 0, 0]), 0, "calmest possible");
+  assert.equal(scoreAnswers(STRESS, [4, 4, 4, 0, 4, 0, 4, 4]), 32, "most strained possible");
 
-  const bands = [[0, "низький"], [13, "низький"], [14, "помірний"], [26, "помірний"], [27, "високий"], [40, "високий"]];
-  bands.forEach(([score, expected]) => assert.match(severityOf(PSS10, score), new RegExp(expected)));
-  assert.match(PSS10.prompt, /останнього місяця/, "this scale asks about a month, not two weeks");
-  assert.equal(buildResult(PSS10, new Array(10).fill(2), WED_NOON_UTC).score, 20);
+  const bands = [[0, "низький"], [9, "низький"], [10, "помірний"], [19, "помірний"], [20, "високий"], [32, "високий"]];
+  bands.forEach(([score, expected]) => assert.match(severityOf(STRESS, score), new RegExp(expected)));
+  assert.match(STRESS.prompt, /останнього місяця/, "this scale asks about a month, not two weeks");
+  assert.match(STRESS.caveat, /не валідований опитувальник/);
 });
 
-test("instruments: only the sleep and stress scales are paid", () => {
+test("instruments: only the sleep and stress scales are paid, and only they carry a caveat", () => {
   assert.equal(GAD7.paid, undefined);
   assert.equal(PHQ9.paid, undefined);
-  assert.equal(ISI.paid, true);
-  assert.equal(PSS10.paid, true);
+  assert.equal(SLEEP.paid, true);
+  assert.equal(STRESS.paid, true);
+  // The published instruments need no disclaimer, the bot's own ones do.
+  assert.equal(GAD7.caveat, undefined);
+  assert.equal(PHQ9.caveat, undefined);
+  assert.ok(SLEEP.caveat && STRESS.caveat);
 });
 
 // --------------------------------------------------------------- billing
@@ -1124,20 +1127,20 @@ test("paywall: /start opens a trial and says how long it lasts", () => {
   // The locked scales are marked in the keyboard, not hidden.
   const rows = started[0].payload.reply_markup.inline_keyboard;
   assert.deepEqual(rows[0].map((b) => b.callback_data), ["s|gad7", "s|phq9"]);
-  assert.deepEqual(rows[1].map((b) => b.callback_data), ["s|isi", "s|pss10"]);
+  assert.deepEqual(rows[1].map((b) => b.callback_data), ["s|sleep", "s|stress"]);
   assert.doesNotMatch(rows[1][0].text, /🔒/, "nothing is locked during the trial");
 });
 
 test("paywall: the sleep and stress scales run during the trial and lock after it", () => {
   const h = harness();
   h.say("/start");
-  assert.match(lastText(h.say("/isi")), /Труднощі із засинанням/);
-  assert.equal(h.sessions.get(777, h.clock.now).instrumentId, "isi");
-  assert.match(lastText(h.say("/stress")), /останнього місяця|неочікувано/);
+  assert.match(lastText(h.say("/sleep")), /Довго не могли заснути/);
+  assert.equal(h.sessions.get(777, h.clock.now).instrumentId, "sleep");
+  assert.match(lastText(h.say("/stress")), /Напруження/);
 
   // Two weeks and a minute later.
   h.clock.now += 14 * DAY + 60000;
-  const locked = h.say("/isi");
+  const locked = h.say("/sleep");
   assert.match(lastText(locked), /Безкоштовний період закінчився/);
   assert.match(lastText(locked), /100 зірок одноразово/);
   assert.equal(h.sessions.size(), 0, "no session is started behind the paywall");
@@ -1156,7 +1159,7 @@ test("paywall: /buy shows the offer and the button asks Telegram for an invoice"
   const h = harness();
   const offer = h.say("/buy");
   assert.match(lastText(offer), /Повний доступ/);
-  assert.match(lastText(offer), /ISI/);
+  assert.match(lastText(offer), /Сон/);
   assert.match(lastText(offer), /назавжди безкоштовно/);
 
   const tapped = h.tap("pay|start");
@@ -1189,7 +1192,7 @@ test("paywall: a successful payment unlocks everything for good", () => {
   const h = harness();
   h.say("/start");
   h.clock.now += 20 * DAY;
-  assert.match(lastText(h.say("/isi")), /Безкоштовний період закінчився/);
+  assert.match(lastText(h.say("/sleep")), /Безкоштовний період закінчився/);
 
   const paid = h.router.handleUpdate({
     update_id: 22,
@@ -1208,7 +1211,7 @@ test("paywall: a successful payment unlocks everything for good", () => {
   assert.equal(h.store.user(777).pro.chargeId, "ch_live_1");
   assert.equal(h.router.access(777).kind, "pro");
 
-  assert.match(lastText(h.say("/isi")), /Труднощі із засинанням/);
+  assert.match(lastText(h.say("/sleep")), /Довго не могли заснути/);
   h.clock.now += 5 * 365 * DAY;
   assert.equal(h.router.access(777).active, true, "a one-time purchase does not lapse");
   assert.match(lastText(h.say("/buy")), /уже відкритий/);
@@ -1288,12 +1291,12 @@ test("paywall: the window is told the state, and the bot still refuses a locked 
       message_id: 1,
       chat: h.chat,
       web_app_data: {
-        data: JSON.stringify({ v: 1, type: "result", instrument: "isi", answers: [4, 4, 4, 4, 4, 4, 4] }),
+        data: JSON.stringify({ v: 1, type: "result", instrument: "sleep", answers: [4, 4, 4, 4, 4, 4, 4] }),
       },
     },
   });
   assert.match(lastText(submitted), /Повний доступ/);
-  assert.equal(h.store.history(777, "isi").length, 0, "nothing is stored behind the paywall");
+  assert.equal(h.store.history(777, "sleep").length, 0, "nothing is stored behind the paywall");
 
   applyPayment(h.store, 777, { currency: "XTR", total_amount: 100, telegram_payment_charge_id: "ch_3" }, h.clock.now);
   h.router.handleUpdate({
@@ -1302,20 +1305,120 @@ test("paywall: the window is told the state, and the bot still refuses a locked 
       message_id: 1,
       chat: h.chat,
       web_app_data: {
-        data: JSON.stringify({ v: 1, type: "result", instrument: "isi", answers: [4, 4, 4, 4, 4, 4, 4] }),
+        data: JSON.stringify({ v: 1, type: "result", instrument: "sleep", answers: [4, 4, 4, 4, 4, 4, 4] }),
       },
     },
   });
-  assert.equal(h.store.lastResult(777, "isi").score, 28);
+  assert.equal(h.store.lastResult(777, "sleep").score, 28);
 });
 
 test("paywall: a full stress run through the keyboard scores the reversed items", () => {
   const h = harness();
   h.say("/start");
-  const finished = completeViaKeyboard(h, PSS10, [4, 4, 4, 0, 0, 4, 0, 0, 4, 4]);
-  assert.match(scoreText(finished), /Бали: <b>40<\/b> з 40/);
-  assert.match(scoreText(finished), /високий стрес/);
-  assert.equal(h.store.lastResult(777, "pss10").score, 40);
+  const finished = completeViaKeyboard(h, STRESS, [4, 4, 4, 0, 4, 0, 4, 4]);
+  assert.match(scoreText(finished), /Бали: <b>32<\/b> з 32/);
+  assert.match(scoreText(finished), /високий рівень напруження/);
+  assert.match(scoreText(finished), /не валідований опитувальник/);
+  assert.equal(h.store.lastResult(777, "stress").score, 32);
+});
+
+// --------------------------------------------------------------- help offer
+
+const CONTACT = { username: "helper_psy", name: "Олексій", role: "психолог" };
+
+test("contact: a score above the cutoff offers a ready message with the scores in it", () => {
+  const h = harness({ config: { contact: CONTACT } });
+  h.say("/start");
+  const finished = completeViaKeyboard(h, GAD7, [2, 2, 2, 2, 2, 2, 2]);
+  const offer = textsOf(finished).find((text) => text.indexOf("Можна не розбиратися") !== -1);
+  assert.ok(offer, "the offer follows a score above the cutoff");
+  assert.match(offer, /Олексій/);
+  assert.match(offer, /психолог/);
+  assert.match(offer, /GAD-7 \(скринінг тривоги\): 14 з 21/);
+  assert.match(offer, /помірна тривога/);
+
+  // The order matters: the score first, the offer next, the open question last.
+  const order = textsOf(finished);
+  assert.ok(order.findIndex((x) => x.indexOf("Бали:") !== -1) <
+    order.findIndex((x) => x.indexOf("Можна не розбиратися") !== -1));
+  assert.ok(order.findIndex((x) => x.indexOf("Можна не розбиратися") !== -1) <
+    order.findIndex((x) => x.indexOf("вільними словами") !== -1));
+
+  const button = finished.find((action) => {
+    const rows = action.payload && action.payload.reply_markup && action.payload.reply_markup.inline_keyboard;
+    if (!Array.isArray(rows) || !rows.length || !rows[0].length) return false;
+    return String(rows[0][0].url || "").indexOf("t.me/helper_psy") !== -1;
+  });
+  assert.ok(button, "a link to the account with the draft attached");
+  const url = button.payload.reply_markup.inline_keyboard[0][0].url;
+  assert.match(url, /^https:\/\/t\.me\/helper_psy\?text=/);
+  // Telegram fills the box from ?text= and the person presses send.
+  const draft = decodeURIComponent(url.slice(url.indexOf("?text=") + 6));
+  assert.match(draft, /хотів би звернутися за допомогою/);
+  assert.match(draft, /GAD-7 \(скринінг тривоги\): 14 з 21/);
+  assert.ok(url.indexOf(" ") === -1, "the draft is encoded, not raw");
+});
+
+test("contact: a score below the cutoff is left alone", () => {
+  const h = harness({ config: { contact: CONTACT } });
+  h.say("/start");
+  const finished = completeViaKeyboard(h, GAD7, [0, 0, 0, 1, 0, 0, 0]);
+  assert.equal(textsOf(finished).find((text) => text.indexOf("Можна не розбиратися") !== -1), undefined);
+});
+
+test("contact: marked risk offers help even when the total is low, after the crisis block", () => {
+  const h = harness({ config: { contact: CONTACT } });
+  h.say("/start");
+  const finished = completeViaKeyboard(h, PHQ9, [0, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
+  const score = scoreText(finished);
+  assert.match(score, /Бали: <b>1<\/b> з 27/, "below every cutoff");
+  // Emergency services stay inside the result, ahead of any private contact.
+  assert.match(score, /7333/);
+  const order = textsOf(finished);
+  assert.ok(order.findIndex((x) => x.indexOf("7333") !== -1) <
+    order.findIndex((x) => x.indexOf("Можна не розбиратися") !== -1),
+  "the crisis lines come before the personal contact");
+});
+
+test("contact: the draft carries every scale the person has taken", () => {
+  const h = harness({ config: { contact: CONTACT } });
+  h.say("/start");
+  completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
+  h.say("/skip");
+  const finished = completeViaKeyboard(h, STRESS, [4, 4, 4, 0, 4, 0, 4, 4]);
+  const offer = textsOf(finished).find((text) => text.indexOf("Можна не розбиратися") !== -1);
+  assert.match(offer, /GAD-7/);
+  assert.match(offer, /Стрес/);
+  assert.match(offer, /32 з 32/);
+});
+
+test("contact: /contact works any time and stays free after the trial", () => {
+  const h = harness({ config: { contact: CONTACT } });
+  h.say("/start");
+  completeViaKeyboard(h, GAD7, [2, 2, 2, 2, 2, 2, 2]);
+  h.clock.now += 30 * DAY;
+  assert.match(lastText(h.say("/results")), /Повний доступ/, "history is locked by now");
+  const offer = lastText(h.say("/contact"));
+  assert.match(offer, /Можна не розбиратися/);
+  assert.match(offer, /GAD-7 \(скринінг тривоги\): 14 з 21/);
+});
+
+test("contact: with no username configured nothing is offered", () => {
+  const h = harness();
+  h.say("/start");
+  const finished = completeViaKeyboard(h, GAD7, [3, 3, 3, 3, 3, 3, 3]);
+  assert.equal(textsOf(finished).find((text) => text.indexOf("Можна не розбиратися") !== -1), undefined);
+  assert.match(lastText(h.say("/contact")), /не налаштований/);
+});
+
+test("contact: the username is validated", () => {
+  const good = loadConfig({ BOT_TOKEN: FAKE_TOKEN, CONTACT_USERNAME: "@helper_psy" }, { envFile: false });
+  assert.equal(good.contact.username, "helper_psy", "a leading at sign is stripped");
+  assert.equal(loadConfig({ BOT_TOKEN: FAKE_TOKEN }, { envFile: false }).contact.username, "");
+  assert.throws(() => loadConfig({ BOT_TOKEN: FAKE_TOKEN, CONTACT_USERNAME: "ab" }, { envFile: false }),
+    /must be a Telegram username/);
+  assert.throws(() => loadConfig({ BOT_TOKEN: FAKE_TOKEN, CONTACT_USERNAME: "bad name!" }, { envFile: false }),
+    /must be a Telegram username/);
 });
 
 // --------------------------------------------------------------- mini app

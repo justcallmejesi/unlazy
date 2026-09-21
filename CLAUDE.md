@@ -46,11 +46,19 @@ with its crisis block, the weekly note, `/export` and `/delete`. A
 questionnaire that asks about self-harm never ends in a payment prompt, and
 access to one's own health data is not a feature to sell.
 
-Paid: ISI and PSS-10, history (`/results`, `/last`), statistics, the weekly
-reminder and its settings (`/remind`, `/tz`).
+Paid: the sleep and stress scales, history (`/results`, `/last`), statistics,
+the weekly reminder and its settings (`/remind`, `/tz`).
 
-ISI and PSS-10 are copyrighted and commercial use needs the rightsholder's
-permission; see the licence note in `telegram-bot/README.md`.
+The sleep and stress scales are written for this bot, not taken from a
+published instrument: ISI and PSS-10 are copyrighted and commercial use needs
+the rightsholder's permission. Every result of the bot's own scales states that
+it is self-observation and not a validated screening tool. Keep it that way, or
+license a real instrument.
+
+Above a cutoff, or when the PHQ-9 risk item is marked, the bot offers a
+prefilled `t.me/<CONTACT_USERNAME>?text=` draft naming the person's scores.
+Telegram never sends it; the person does. Emergency services always appear
+before the personal contact, and `/contact` stays free.
 
 Chart colours are per scale: anxiety red, depression dark blue, sleep light
 blue, stress burgundy. Light mode clears every check in the dataviz validator;

@@ -33,6 +33,10 @@ function stampIn(schedule, timestampMs) {
   return formatLocalDateTime(timestampMs, offsetAt(schedule, timestampMs));
 }
 
+function dateIn(schedule, timestampMs) {
+  return stampIn(schedule, timestampMs).split(" ")[0];
+}
+
 export const DISCLAIMER =
   "Опитувальники GAD-7 і PHQ-9 це інструменти самоспостереження, а не діагноз. " +
   "Підсумковий бал не замінює консультацію лікаря або психотерапевта.";
@@ -41,8 +45,8 @@ export const COMMANDS = [
   { command: "app", description: "Відкрити застосунок у вікні" },
   { command: "gad7", description: "Пройти GAD-7 (тривога, 7 питань)" },
   { command: "phq9", description: "Пройти PHQ-9 (настрій, 9 питань)" },
-  { command: "isi", description: "Пройти ISI (сон, 7 питань)" },
-  { command: "stress", description: "Пройти PSS-10 (стрес, 10 питань)" },
+  { command: "sleep", description: "Щоденник сну (7 питань)" },
+  { command: "stress", description: "Рівень напруження (8 питань)" },
   { command: "results", description: "Історія результатів (повний доступ)" },
   { command: "last", description: "Останні результати (повний доступ)" },
   { command: "remind", description: "Нагадування (повний доступ)" },
@@ -51,6 +55,7 @@ export const COMMANDS = [
   { command: "delete", description: "Видалити всі мої дані" },
   { command: "cancel", description: "Перервати поточний опитувальник" },
   { command: "buy", description: "Повний доступ: шкали сну і стресу" },
+  { command: "contact", description: "Звернутися за допомогою" },
   { command: "paysupport", description: "Питання щодо оплати і повернення" },
   { command: "about", description: "Про тести і про те, що зберігає бот" },
   { command: "help", description: "Список команд" },
@@ -75,8 +80,8 @@ export function greeting(name, schedule, options = {}) {
     "Я допомагаю регулярно відстежувати стан за короткими опитувальниками:",
     "• <b>GAD-7</b>: 7 питань про тривогу",
     "• <b>PHQ-9</b>: 9 питань про настрій, плюс одне питання про те, як це ускладнювало життя",
-    "• <b>ISI</b>: 7 питань про сон",
-    "• <b>PSS-10</b>: 10 питань про стрес за останній місяць",
+    "• <b>Сон</b>: 7 питань про останні 2 тижні",
+    "• <b>Стрес</b>: 8 питань про напруження за останній місяць",
     "",
     options.remindersActive
       ? "Результати зберігаються, щоб Ви бачили динаміку. " +
@@ -109,12 +114,11 @@ export function aboutText(reminderLine) {
     "",
     "Бал 10 і вище в GAD-7 або PHQ-9 прийнято вважати підставою обговорити стан із фахівцем.",
     "",
-    "<b>ISI</b>: індекс тяжкості безсоння. Діапазон від 0 до 28 балів.",
-    "0 до 7 без клінічно значущого безсоння, 8 до 14 підпорогове, 15 до 21 помірне, 22 до 28 тяжке.",
-    "",
-    "<b>PSS-10</b>: шкала відчутного стресу за останній місяць. Діапазон від 0 до 40 балів.",
-    "0 до 13 низький, 14 до 26 помірний, 27 до 40 високий стрес. Чотири питання враховуються навпаки: " +
-      "відчуття контролю знижує підсумковий бал.",
+    "<b>Сон</b> і <b>Стрес</b> це власні шкали самоспостереження цього бота, а не валідовані опитувальники. " +
+      "Вони показують динаміку, але не є скринінгом.",
+    "Сон: 0 до 28 балів. 0 до 6 спокійно, 7 до 13 легкі порушення, 14 до 20 помірні, 21 до 28 виражені.",
+    "Стрес: 0 до 32 балів. 0 до 9 низький, 10 до 19 помірний, 20 до 32 високий. Два питання враховуються " +
+      "навпаки, щоб згода з усім не давала високий бал сама собою.",
     "",
     "<b>Що зберігає бот</b>",
     "Ваш ідентифікатор чату, відповіді та бали кожного проходження, налаштування нагадувань.",
@@ -196,8 +200,49 @@ export function alreadyPro() {
   return "Повний доступ уже відкритий. Дякую, що підтримали бота.";
 }
 
-export function lockedFeature(name) {
-  return name;
+// A message the person can read, edit and send themselves. Telegram never
+// sends it automatically, which is exactly right for health data: the prefill
+// is a draft, the send is their decision.
+export function helpRequestText(store, chatId, schedule) {
+  const lines = ["Вітаю! Я пройшов опитувальники в боті і хотів би звернутися за допомогою.", "", "Мої результати:"];
+  INSTRUMENT_LIST.forEach((instrument) => {
+    const entry = store.lastResult(chatId, instrument.id);
+    if (!entry) return;
+    const shape = describe(instrument, entry);
+    lines.push(instrument.title + " (" + instrument.subtitle + "): " + entry.score + " з " + shape.maxScore +
+      ", " + shape.severity + ", " + dateIn(schedule, Date.parse(entry.completedAt)));
+  });
+  return lines.join("\n");
+}
+
+export function helpOffer(contact, requestText) {
+  const who = contact.name || "@" + contact.username;
+  const role = contact.role ? " (" + contact.role + ")" : "";
+  return [
+    "<b>Можна не розбиратися з цим самому</b>",
+    "",
+    "Якщо хочете обговорити ці результати з людиною, напишіть " + escapeHtml(who) + escapeHtml(role) + ".",
+    "Кнопка нижче відкриє чат із уже готовим повідомленням: Ви побачите текст, зможете його змінити і надішлете самі.",
+    "",
+    "Текст, якщо зручніше скопіювати:",
+    "<pre>" + escapeHtml(requestText) + "</pre>",
+  ].join("\n");
+}
+
+// Telegram fills the message box from ?text= and leaves the sending to the
+// person. The draft is capped so no client truncates the link.
+export function helpKeyboard(contact, requestText) {
+  const draft = requestText.length > 600 ? requestText.slice(0, 600) : requestText;
+  return {
+    inline_keyboard: [[{
+      text: contact.name ? "Написати: " + contact.name : "Написати @" + contact.username,
+      url: "https://t.me/" + contact.username + "?text=" + encodeURIComponent(draft),
+    }]],
+  };
+}
+
+export function contactUnavailable() {
+  return "Контакт для звернення не налаштований у цьому боті.";
 }
 
 export function paySupport(price) {
@@ -309,6 +354,10 @@ export function resultMessage(instrument, result, previous, schedule, crisisCont
   lines.push(result.aboveCutoff
     ? "Бал вище порогу " + instrument.cutoff + ". Це підстава обговорити стан із лікарем або психотерапевтом."
     : "Бал нижче порогу " + instrument.cutoff + ". Продовжуйте спостерігати за динамікою.");
+  if (instrument.caveat) {
+    lines.push("");
+    lines.push("<i>" + escapeHtml(instrument.caveat) + "</i>");
+  }
   if (result.risk) {
     lines.push("");
     lines.push(crisisBlock(crisisContact));

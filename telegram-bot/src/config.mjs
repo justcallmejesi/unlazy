@@ -103,6 +103,11 @@ export function loadConfig(env = process.env, options = {}) {
     throw new Error("WEBAPP_URL must be an https URL, for example https://example.pages.dev/");
   }
 
+  const contactUsername = String(env.CONTACT_USERNAME || "").trim().replace(/^@/, "");
+  if (contactUsername && !/^[A-Za-z0-9_]{4,32}$/.test(contactUsername)) {
+    throw new Error("CONTACT_USERNAME must be a Telegram username: 4 to 32 letters, digits or underscores");
+  }
+
   const memoryOnly = /^(1|true|yes)$/i.test(String(env.MEMORY_ONLY || ""));
   const dataFile = memoryOnly
     ? null
@@ -119,6 +124,13 @@ export function loadConfig(env = process.env, options = {}) {
     tickSeconds: positiveNumber(env.TICK_SECONDS, 60, "TICK_SECONDS"),
     sessionIdleTimeoutMs: positiveNumber(env.SESSION_IDLE_MINUTES, 60, "SESSION_IDLE_MINUTES") * 60 * 1000,
     crisisContact: String(env.CRISIS_CONTACT || DEFAULT_CRISIS_CONTACT),
+    // Where to point someone whose score is above the cutoff. Empty username
+    // switches the whole offer off.
+    contact: {
+      username: String(env.CONTACT_USERNAME || "").trim().replace(/^@/, ""),
+      name: String(env.CONTACT_NAME || "").trim(),
+      role: String(env.CONTACT_ROLE || "").trim(),
+    },
     price: {
       // Stars, not a minor currency unit. 100 Stars is roughly 100 UAH for the
       // buyer; what reaches the operator is less, see the README.
