@@ -97,6 +97,10 @@ REMINDER_UTC_OFFSET=+3
 # https address of the Mini App once it is deployed. Leave empty for chat only.
 WEBAPP_URL=
 
+# One-time full access price in Telegram Stars, and the free trial length.
+PRICE_STARS=100
+TRIAL_DAYS=14
+
 # Off-machine backup target for scp, for example user@host:/backups/gad7
 BACKUP_REMOTE=
 ENVEOF

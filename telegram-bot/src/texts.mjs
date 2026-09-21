@@ -4,7 +4,9 @@
 // display name or a stored answer can never inject markup.
 
 import { escapeHtml } from "./telegram.mjs";
-import { INSTRUMENT_LIST, getInstrument, severityOf } from "./instruments.mjs";
+import {
+  FREE_INSTRUMENT_LIST, INSTRUMENT_LIST, PAID_INSTRUMENT_LIST, getInstrument, severityOf,
+} from "./instruments.mjs";
 import { formatLocalDateTime, formatTimeOfDay, formatUtcOffset, offsetAt } from "./reminders.mjs";
 import { MAX_NOTE_LENGTH } from "./store.mjs";
 
@@ -39,6 +41,8 @@ export const COMMANDS = [
   { command: "app", description: "Відкрити застосунок у вікні" },
   { command: "gad7", description: "Пройти GAD-7 (тривога, 7 питань)" },
   { command: "phq9", description: "Пройти PHQ-9 (настрій, 9 питань)" },
+  { command: "isi", description: "Пройти ISI (сон, 7 питань)" },
+  { command: "stress", description: "Пройти PSS-10 (стрес, 10 питань)" },
   { command: "results", description: "Історія результатів" },
   { command: "last", description: "Останні результати" },
   { command: "remind", description: "Нагадування: on, off або ГГ:ХХ" },
@@ -46,6 +50,8 @@ export const COMMANDS = [
   { command: "export", description: "Вивантажити мої дані у JSON" },
   { command: "delete", description: "Видалити всі мої дані" },
   { command: "cancel", description: "Перервати поточний опитувальник" },
+  { command: "buy", description: "Повний доступ: шкали сну і стресу" },
+  { command: "paysupport", description: "Питання щодо оплати і повернення" },
   { command: "about", description: "Про тести і про те, що зберігає бот" },
   { command: "help", description: "Список команд" },
 ];
@@ -59,23 +65,27 @@ export function crisisBlock(crisisContact) {
   ].join("\n");
 }
 
-export function greeting(name, schedule) {
+export function greeting(name, schedule, extra = "") {
   const hello = name ? "Привіт, " + escapeHtml(name) + "!" : "Привіт!";
   const words = weekdayWords(schedule);
   return [
     hello,
     "",
-    "Я допомагаю регулярно відстежувати тривогу і настрій за двома короткими опитувальниками:",
+    "Я допомагаю регулярно відстежувати стан за короткими опитувальниками:",
     "• <b>GAD-7</b>: 7 питань про тривогу",
     "• <b>PHQ-9</b>: 9 питань про настрій, плюс одне питання про те, як це ускладнювало життя",
+    "• <b>ISI</b>: 7 питань про сон",
+    "• <b>PSS-10</b>: 10 питань про стрес за останній місяць",
     "",
     "Результати зберігаються, щоб Ви бачили динаміку. " +
       escapeHtml(words.every.charAt(0).toUpperCase() + words.every.slice(1)) + " я нагадаю пройти тести знову.",
     "",
     DISCLAIMER,
+    extra ? "" : null,
+    extra || null,
     "",
     "Команди: /help",
-  ].join("\n");
+  ].filter((line) => line !== null).join("\n");
 }
 
 export function helpText() {
@@ -94,7 +104,14 @@ export function aboutText(reminderLine) {
     "0 до 4 мінімальні, 5 до 9 легкі, 10 до 14 помірні, 15 до 19 помірно тяжкі, 20 до 27 тяжкі прояви.",
     "Десяте питання про те, наскільки симптоми ускладнювали життя, не входить у суму балів.",
     "",
-    "Бал 10 і вище в будь-якому з опитувальників прийнято вважати підставою обговорити стан із фахівцем.",
+    "Бал 10 і вище в GAD-7 або PHQ-9 прийнято вважати підставою обговорити стан із фахівцем.",
+    "",
+    "<b>ISI</b>: індекс тяжкості безсоння. Діапазон від 0 до 28 балів.",
+    "0 до 7 без клінічно значущого безсоння, 8 до 14 підпорогове, 15 до 21 помірне, 22 до 28 тяжке.",
+    "",
+    "<b>PSS-10</b>: шкала відчутного стресу за останній місяць. Діапазон від 0 до 40 балів.",
+    "0 до 13 низький, 14 до 26 помірний, 27 до 40 високий стрес. Чотири питання враховуються навпаки: " +
+      "відчуття контролю знижує підсумковий бал.",
     "",
     "<b>Що зберігає бот</b>",
     "Ваш ідентифікатор чату, відповіді та бали кожного проходження, налаштування нагадувань.",
@@ -103,6 +120,89 @@ export function aboutText(reminderLine) {
     reminderLine,
     "",
     DISCLAIMER,
+  ].join("\n");
+}
+
+function starWord(stars) {
+  const last = stars % 10;
+  const tens = stars % 100;
+  if (tens >= 11 && tens <= 14) return "зірок";
+  if (last === 1) return "зірка";
+  if (last >= 2 && last <= 4) return "зірки";
+  return "зірок";
+}
+
+export function priceLine(price) {
+  return price.stars + " " + starWord(price.stars) + " одноразово, без підписки";
+}
+
+export function trialNotice(entitlementState, price) {
+  if (entitlementState.kind !== "trial") return "";
+  return "Безкоштовний період: залишилося днів " + entitlementState.daysLeft +
+    ". Далі повний доступ коштує " + priceLine(price) + ".";
+}
+
+// Shown when a locked feature is asked for. Says plainly what stays free.
+export function paywall(price, entitlementState) {
+  const lines = ["<b>Повний доступ</b>", ""];
+  if (entitlementState.kind === "expired") {
+    lines.push("Безкоштовний період закінчився.");
+  } else {
+    lines.push("Ця частина входить у повний доступ.");
+  }
+  lines.push("");
+  lines.push("<b>Що відкривається</b>");
+  PAID_INSTRUMENT_LIST.forEach((instrument) => {
+    lines.push("• " + escapeHtml(instrument.title) + ": " + escapeHtml(instrument.subtitle));
+  });
+  lines.push("• повна історія і статистика за всіма шкалами");
+  lines.push("");
+  lines.push("<b>Що назавжди безкоштовно</b>");
+  FREE_INSTRUMENT_LIST.forEach((instrument) => {
+    lines.push("• " + escapeHtml(instrument.title) + ": " + escapeHtml(instrument.subtitle));
+  });
+  lines.push("• щотижневе нагадування, блок підтримки, /export і /delete");
+  lines.push("");
+  lines.push("Ціна: <b>" + escapeHtml(priceLine(price)) + "</b>. Оплата зірками Telegram.");
+  return lines.join("\n");
+}
+
+export function buyKeyboard(price) {
+  return {
+    inline_keyboard: [[{
+      text: "Відкрити повний доступ за " + price.stars + " " + starWord(price.stars),
+      callback_data: "pay|start",
+    }]],
+  };
+}
+
+export function purchaseThanks(price) {
+  return [
+    "Дякую, повний доступ відкрито назавжди.",
+    "",
+    "Тепер доступні " + PAID_INSTRUMENT_LIST.map((instrument) => instrument.title).join(" і ") +
+      ", повна історія і статистика за всіма шкалами.",
+    "",
+    "Питання щодо оплати: /paysupport",
+  ].join("\n");
+}
+
+export function alreadyPro() {
+  return "Повний доступ уже відкритий. Дякую, що підтримали бота.";
+}
+
+export function paySupport(price) {
+  return [
+    "<b>Оплата і повернення</b>",
+    "",
+    "Повний доступ це одноразова покупка за " + escapeHtml(priceLine(price)) + ". Підписки немає, " +
+      "нічого не списується повторно.",
+    "",
+    "Повернення можливе протягом 14 днів: напишіть тут, і я поверну зірки через Telegram. " +
+      "Після повернення платні шкали закриються, а Ваші результати залишаться.",
+    "",
+    "Опитувальники GAD-7 і PHQ-9, щотижневе нагадування, блок підтримки, вивантаження і видалення " +
+      "даних працюють безкоштовно і після повернення.",
   ].join("\n");
 }
 
@@ -157,13 +257,18 @@ export function appRejected() {
   return "Не вдалося прочитати дані із застосунку. Спробуйте ще раз або пройдіть опитувальник у чаті: /gad7, /phq9.";
 }
 
-export function startKeyboard() {
+export function startKeyboard(unlocked = true) {
+  const paidRow = PAID_INSTRUMENT_LIST.map((instrument) => ({
+    text: unlocked ? instrument.title : instrument.title + " 🔒",
+    callback_data: "s|" + instrument.id,
+  }));
   return {
     inline_keyboard: [
-      INSTRUMENT_LIST.map((instrument) => ({
+      FREE_INSTRUMENT_LIST.map((instrument) => ({
         text: instrument.title,
         callback_data: "s|" + instrument.id,
       })),
+      paidRow,
       [
         { text: "Мої результати", callback_data: "h|all" },
         { text: "Нагадування", callback_data: "r|status" },

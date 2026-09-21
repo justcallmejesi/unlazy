@@ -26,9 +26,9 @@
      border declaration with it. */
   --line: rgba(0, 0, 0, .12);
   --grid: rgba(0, 0, 0, .09);
-  /* Validated categorical slots 1 and 2 (light steps). */
-  --series-gad7: #2a78d6;
-  --series-phq9: #eb6834;
+  /* Validated categorical slot 1. One accent for all charts: every scale has
+     its own plot and title, so colour is not the identity carrier. */
+  --series: #2a78d6;
   --radius: 14px;
 }
 @media (prefers-color-scheme: dark) {
@@ -40,8 +40,7 @@
     --ink: var(--tg-theme-text-color, #f5f5f5);
     --ink-2: var(--tg-theme-subtitle-text-color, #c3c2b7);
     --ink-3: var(--tg-theme-hint-color, #8d9aa8);
-    --series-gad7: #3987e5;
-    --series-phq9: #d95926;
+    --series: #3987e5;
     --line: rgba(255, 255, 255, .18);
     --grid: rgba(255, 255, 255, .13);
   }
@@ -54,8 +53,7 @@
   --ink: var(--tg-theme-text-color, #f5f5f5);
   --ink-2: var(--tg-theme-subtitle-text-color, #c3c2b7);
   --ink-3: var(--tg-theme-hint-color, #8d9aa8);
-  --series-gad7: #3987e5;
-  --series-phq9: #d95926;
+  --series: #3987e5;
   --line: rgba(255, 255, 255, .18);
   --grid: rgba(255, 255, 255, .13);
 }
@@ -103,8 +101,9 @@ p { margin: 0 0 10px; }
 /* Inline SVG rather than symbol characters: the WebView font is whatever the
    device ships, and half the geometric glyphs fall back to a box. */
 .menu-item .glyph { width: 26px; height: 26px; flex: none; color: var(--ink-3); }
-.menu-item .glyph.gad7 { color: var(--series-gad7); }
-.menu-item .glyph.phq9 { color: var(--series-phq9); }
+.menu-item .glyph.scale { color: var(--series); }
+.menu-item.locked .glyph { opacity: .55; }
+.menu-item .lock { font-size: 12px; color: var(--ink-3); }
 .menu-item .body { flex: 1; min-width: 0; }
 .menu-item .title { display: block; font-weight: 600; }
 .menu-item .hint { display: block; font-size: 13px; color: var(--ink-3); margin-top: 1px; }
@@ -191,18 +190,9 @@ td .note { display: block; color: var(--ink-2); font-size: 13px; margin-top: 3px
 
 <div id="home" class="screen active">
   <h1>Самоспостереження</h1>
-  <p class="muted">Тривога і настрій за GAD-7 і PHQ-9. Результати зберігаються, щосереди приходить нагадування.</p>
-  <div class="menu">
-    <button class="menu-item" data-go="quiz" data-instrument="gad7">
-      <svg class="glyph gad7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" stroke="none"/></svg>
-      <span class="body"><span class="title">GAD-7 · тривога</span><span class="hint">7 питань, близько хвилини</span></span>
-      <span class="chev">›</span>
-    </button>
-    <button class="menu-item" data-go="quiz" data-instrument="phq9">
-      <svg class="glyph phq9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16 8 8 0 0 1 0-16z" fill="currentColor" stroke="none" opacity=".35"/></svg>
-      <span class="body"><span class="title">PHQ-9 · настрій</span><span class="hint">10 питань, близько двох хвилин</span></span>
-      <span class="chev">›</span>
-    </button>
+  <p class="muted">Тривога, настрій, сон і стрес за короткими шкалами. Результати зберігаються, раз на тиждень приходить нагадування.</p>
+  <div class="menu" id="home-menu">
+    <!-- Questionnaire cards are built from instruments.mjs by app.js. -->
     <button class="menu-item" data-go="stats">
       <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V5"/><path d="M4 19h16"/><path d="m7 14 4-5 3 3 4-6"/></svg>
       <span class="body"><span class="title">Статистика</span><span class="hint">динаміка балів за тижнями</span></span>
@@ -224,7 +214,7 @@ td .note { display: block; color: var(--ink-2); font-size: 13px; margin-top: 3px
       <span class="chev">›</span>
     </button>
   </div>
-  <p class="disclaimer">Опитувальники GAD-7 і PHQ-9 це інструменти самоспостереження, а не діагноз. Підсумковий бал не замінює консультацію лікаря або психотерапевта.</p>
+  <p class="disclaimer">Ці опитувальники це інструменти самоспостереження, а не діагноз. Підсумковий бал не замінює консультацію лікаря або психотерапевта.</p>
 </div>
 
 <div id="quiz" class="screen">
@@ -262,10 +252,10 @@ td .note { display: block; color: var(--ink-2); font-size: 13px; margin-top: 3px
 <div id="stats" class="screen">
   <button class="back" data-go="home">‹ Назад</button>
   <h2>Статистика</h2>
+  <div class="callout" id="stats-locked" hidden></div>
   <div class="tile-row" id="stats-tiles"></div>
-  <div class="card" id="stats-gad7"></div>
-  <div class="card" id="stats-phq9"></div>
-  <p class="muted">Кожен опитувальник має власну шкалу, тому графіки окремі. Пунктир це поріг 10.</p>
+  <div id="stats-charts"></div>
+  <p class="muted">Кожен опитувальник має власну шкалу, тому графіки окремі, а пунктир на кожному це його власний поріг.</p>
   <button class="ghost" data-go="history">Подивитися таблицею</button>
 </div>
 

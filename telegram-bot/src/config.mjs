@@ -46,6 +46,12 @@ export function loadEnvFile(path, env = process.env) {
   return true;
 }
 
+function positiveInteger(raw, fallback, label) {
+  const value = positiveNumber(raw, fallback, label);
+  if (!Number.isInteger(value)) throw new Error(label + " must be a whole number");
+  return value;
+}
+
 function positiveNumber(raw, fallback, label) {
   if (raw === undefined || raw === "") return fallback;
   const value = Number(raw);
@@ -113,6 +119,15 @@ export function loadConfig(env = process.env, options = {}) {
     tickSeconds: positiveNumber(env.TICK_SECONDS, 60, "TICK_SECONDS"),
     sessionIdleTimeoutMs: positiveNumber(env.SESSION_IDLE_MINUTES, 60, "SESSION_IDLE_MINUTES") * 60 * 1000,
     crisisContact: String(env.CRISIS_CONTACT || DEFAULT_CRISIS_CONTACT),
+    price: {
+      // Stars, not a minor currency unit. 100 Stars is roughly 100 UAH for the
+      // buyer; what reaches the operator is less, see the README.
+      stars: positiveInteger(env.PRICE_STARS, 100, "PRICE_STARS"),
+      trialDays: positiveInteger(env.TRIAL_DAYS, 14, "TRIAL_DAYS"),
+      title: String(env.PRICE_TITLE || "Повний доступ"),
+      description: String(env.PRICE_DESCRIPTION ||
+        "Шкали сну і стресу, повна історія та статистика. Одноразово, без підписки."),
+    },
     reminder: {
       time,
       weekday,

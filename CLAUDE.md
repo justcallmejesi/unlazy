@@ -23,6 +23,7 @@ See `telegram-bot/README.md`. Locale-bearing values:
 | Questionnaire items, options, severity bands | `telegram-bot/src/instruments.mjs` |
 | All user-facing copy | `telegram-bot/src/texts.mjs`, plus inline strings in `telegram-bot/src/router.mjs` |
 | Crisis contacts | `DEFAULT_CRISIS_CONTACT` in `telegram-bot/src/config.mjs`, overridable with `CRISIS_CONTACT` |
+| Price, trial, entitlement | `telegram-bot/src/billing.mjs`, `PRICE_STARS` and `TRIAL_DAYS` |
 | Default reminder zone and slot | `REMINDER_ZONE`, `REMINDER_WEEKDAY`, `REMINDER_TIME` in `telegram-bot/src/config.mjs`, per-user override with `/tz` |
 
 Scheduling resolves the zone offset per instant from the platform time-zone
@@ -35,3 +36,12 @@ fixed offset and opts out of seasonal changes until `/tz auto`.
 - Zero runtime dependencies, Node 16 compatible, ESM `.mjs`.
 - No em dash or en dash in prose. Use a hyphen, a colon, or a sentence break.
 - `npm test` must stay green, including `node telegram-bot/tests/run-tests.mjs`.
+
+## Paid model
+
+One-time purchase in Telegram Stars (`XTR`) after a 14-day trial. GAD-7, PHQ-9,
+the weekly reminder, the crisis block, `/export` and `/delete` are free
+forever and must stay that way: a questionnaire that asks about self-harm never
+ends in a payment prompt. ISI and PSS-10, deep history and statistics are the
+paid part. ISI and PSS-10 are copyrighted and commercial use needs the
+rightsholder's permission; see the licence note in `telegram-bot/README.md`.

@@ -15,7 +15,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
-import { GAD7, PHQ9, buildResult, scoreAnswers, severityOf, riskFlagged } from "../src/instruments.mjs";
+import {
+  GAD7, ISI, PHQ9, PSS10, buildResult, itemContribution, scoreAnswers, severityOf, riskFlagged,
+} from "../src/instruments.mjs";
+import {
+  applyPayment, checkPreCheckout, ensureTrial, entitlement, invoiceFor, isPro,
+} from "../src/billing.mjs";
 import { Store, MAX_NOTE_LENGTH, MAX_RESULTS_PER_USER } from "../src/store.mjs";
 import { SessionManager } from "../src/session.mjs";
 import {
@@ -53,6 +58,12 @@ function fixtureConfig(overrides = {}) {
     memoryOnly: true,
     dataFile: null,
     webappUrl: null,
+    price: {
+      stars: 100,
+      trialDays: 14,
+      title: "Повний доступ",
+      description: "Шкали сну і стресу, повна історія та статистика.",
+    },
   }, overrides);
 }
 
@@ -150,6 +161,132 @@ test("instruments: buildResult records score, band, cutoff, risk, and impairment
   assert.equal(calm.aboveCutoff, false);
   assert.equal(calm.risk, false);
   assert.equal(calm.impairment, null);
+});
+
+test("instruments: ISI carries its own option labels per item", () => {
+  assert.equal(ISI.items.length, 7);
+  assert.equal(scoreAnswers(ISI, [4, 4, 4, 4, 4, 4, 4]), 28);
+  assert.equal(scoreAnswers(ISI, [0, 0, 0, 0, 0, 0, 0]), 0);
+  // Severity items and satisfaction items read differently to the user.
+  assert.equal(ISI.items[0].options[4].label, "Дуже серйозні");
+  assert.equal(ISI.items[3].options[0].label, "Дуже задоволений");
+  const bands = [[0, "без клінічно"], [7, "без клінічно"], [8, "підпорогове"], [14, "підпорогове"],
+    [15, "помірне"], [21, "помірне"], [22, "тяжке"], [28, "тяжке"]];
+  bands.forEach(([score, expected]) => assert.match(severityOf(ISI, score), new RegExp(expected)));
+  assert.equal(ISI.cutoff, 15);
+  assert.equal(ISI.paid, true);
+});
+
+test("instruments: PSS-10 counts its four positive items backwards", () => {
+  assert.equal(PSS10.items.length, 10);
+  const reversed = PSS10.items.map((item, index) => (item.reverse ? index : null)).filter((x) => x !== null);
+  assert.deepEqual(reversed, [3, 4, 6, 7], "items 4, 5, 7 and 8 are the reverse-scored ones");
+  assert.equal(itemContribution(PSS10.items[0], 4), 4);
+  assert.equal(itemContribution(PSS10.items[3], 4), 0, "full confidence contributes no stress");
+  assert.equal(itemContribution(PSS10.items[3], 0), 4);
+
+  // All zeros is not zero stress: it means never feeling in control either.
+  assert.equal(scoreAnswers(PSS10, new Array(10).fill(0)), 16);
+  assert.equal(scoreAnswers(PSS10, new Array(10).fill(4)), 24);
+  assert.equal(scoreAnswers(PSS10, new Array(10).fill(2)), 20, "the midpoint lands mid-scale");
+  assert.equal(scoreAnswers(PSS10, [0, 0, 0, 4, 4, 0, 4, 4, 0, 0]), 0, "calmest possible");
+  assert.equal(scoreAnswers(PSS10, [4, 4, 4, 0, 0, 4, 0, 0, 4, 4]), 40, "most stressed possible");
+
+  const bands = [[0, "низький"], [13, "низький"], [14, "помірний"], [26, "помірний"], [27, "високий"], [40, "високий"]];
+  bands.forEach(([score, expected]) => assert.match(severityOf(PSS10, score), new RegExp(expected)));
+  assert.match(PSS10.prompt, /останнього місяця/, "this scale asks about a month, not two weeks");
+  assert.equal(buildResult(PSS10, new Array(10).fill(2), WED_NOON_UTC).score, 20);
+});
+
+test("instruments: only the sleep and stress scales are paid", () => {
+  assert.equal(GAD7.paid, undefined);
+  assert.equal(PHQ9.paid, undefined);
+  assert.equal(ISI.paid, true);
+  assert.equal(PSS10.paid, true);
+});
+
+// --------------------------------------------------------------- billing
+
+test("billing: entitlement moves from none to trial to expired, and pro never expires", () => {
+  const start = WED_NOON_UTC;
+  assert.deepEqual(entitlement(null, start), { active: false, kind: "none", daysLeft: null });
+
+  const onTrial = { trialEndsAt: start + 14 * 24 * 3600 * 1000 };
+  assert.equal(entitlement(onTrial, start).kind, "trial");
+  assert.equal(entitlement(onTrial, start).daysLeft, 14);
+  assert.equal(entitlement(onTrial, start + 13.5 * 24 * 3600 * 1000).daysLeft, 1, "the last day still counts");
+  assert.equal(entitlement(onTrial, onTrial.trialEndsAt).kind, "expired");
+  assert.equal(entitlement(onTrial, onTrial.trialEndsAt).active, false);
+
+  const paid = { trialEndsAt: start, pro: { chargeId: "ch_1", stars: 100, since: "x" } };
+  assert.equal(entitlement(paid, start + 10 * 365 * 24 * 3600 * 1000).kind, "pro");
+  assert.equal(isPro(paid), true);
+  // A charge id is the only thing that grants access.
+  assert.equal(isPro({ pro: { stars: 100 } }), false);
+  assert.equal(isPro({ pro: true }), false);
+});
+
+test("billing: the trial starts once and cannot be restarted", () => {
+  const store = new Store({ file: null });
+  ensureTrial(store, 5, WED_NOON_UTC, 14);
+  const first = store.user(5).trialEndsAt;
+  assert.equal(first, WED_NOON_UTC + 14 * 24 * 3600 * 1000);
+  // A month later, /start must not hand out another fortnight.
+  ensureTrial(store, 5, WED_NOON_UTC + 30 * 24 * 3600 * 1000, 14);
+  assert.equal(store.user(5).trialEndsAt, first);
+  assert.equal(entitlement(store.user(5), WED_NOON_UTC + 30 * 24 * 3600 * 1000).kind, "expired");
+});
+
+test("billing: the invoice is in Stars with no provider token", () => {
+  const invoice = invoiceFor(777, { stars: 100, title: "Повний доступ", description: "опис" });
+  assert.equal(invoice.currency, "XTR");
+  assert.equal(invoice.provider_token, undefined, "Stars invoices carry no provider token");
+  assert.deepEqual(invoice.prices, [{ label: "Повний доступ", amount: 100 }]);
+  assert.equal(invoice.payload, "pro-v1:777");
+  assert.equal(invoice.chat_id, 777);
+});
+
+test("billing: pre-checkout accepts only this chat's Stars invoice", () => {
+  assert.deepEqual(checkPreCheckout({ currency: "XTR", invoice_payload: "pro-v1:777" }, 777), { ok: true });
+  assert.equal(checkPreCheckout({ currency: "XTR", invoice_payload: "pro-v1:555" }, 777).ok, false);
+  assert.equal(checkPreCheckout({ currency: "UAH", invoice_payload: "pro-v1:777" }, 777).ok, false);
+  assert.equal(checkPreCheckout(null, 777).ok, false);
+});
+
+test("billing: a payment is recorded only with the charge id a refund needs", () => {
+  const store = new Store({ file: null });
+  assert.equal(applyPayment(store, 9, { currency: "XTR", total_amount: 100 }, WED_NOON_UTC), null,
+    "without a charge id there is nothing to refund later, so nothing is granted");
+  assert.equal(applyPayment(store, 9, { currency: "UAH", total_amount: 100, telegram_payment_charge_id: "c" },
+    WED_NOON_UTC), null);
+  const record = applyPayment(store, 9,
+    { currency: "XTR", total_amount: 100, telegram_payment_charge_id: "ch_abc" }, WED_NOON_UTC);
+  assert.equal(record.chargeId, "ch_abc");
+  assert.equal(record.stars, 100);
+  assert.equal(isPro(store.user(9)), true);
+});
+
+test("billing: a snapshot keeps the trial and the purchase, and rejects a forged one", () => {
+  const file = join(DIR, "billing.json");
+  const first = new Store({ file, writeDelayMs: 1e9 });
+  ensureTrial(first, 11, WED_NOON_UTC, 14);
+  applyPayment(first, 11, { currency: "XTR", total_amount: 100, telegram_payment_charge_id: "ch_x" }, WED_NOON_UTC);
+  first.flush();
+  const second = new Store({ file });
+  second.load();
+  assert.equal(second.user(11).trialEndsAt, WED_NOON_UTC + 14 * 24 * 3600 * 1000);
+  assert.equal(second.user(11).pro.chargeId, "ch_x");
+
+  const forged = join(DIR, "forged.json");
+  writeFileSync(forged, JSON.stringify({
+    version: 1,
+    users: { "12": { pro: true, trialEndsAt: "soon" }, "13": { pro: { stars: 100 } } },
+  }));
+  const third = new Store({ file: forged });
+  third.load();
+  assert.equal(third.user(12).pro, null, "pro: true is not a purchase");
+  assert.equal(third.user(12).trialEndsAt, null);
+  assert.equal(third.user(13).pro, null, "a purchase without a charge id is not a purchase");
 });
 
 // --------------------------------------------------------------- store
@@ -961,6 +1098,181 @@ test("router: the weekly reminder quotes the last score of each instrument", () 
   assert.ok(actions[0].payload.reply_markup.inline_keyboard.length >= 1);
 });
 
+// --------------------------------------------------------------- paywall in the chat
+
+const DAY = 24 * 60 * 60 * 1000;
+
+test("paywall: /start opens a trial and says how long it lasts", () => {
+  const h = harness();
+  const started = h.say("/start");
+  assert.equal(h.store.user(777).trialEndsAt, WED_NOON_UTC + 14 * DAY);
+  assert.match(started[0].payload.text, /Безкоштовний період: залишилося днів 14/);
+  assert.match(started[0].payload.text, /100 зірок одноразово/);
+  // The locked scales are marked in the keyboard, not hidden.
+  const rows = started[0].payload.reply_markup.inline_keyboard;
+  assert.deepEqual(rows[0].map((b) => b.callback_data), ["s|gad7", "s|phq9"]);
+  assert.deepEqual(rows[1].map((b) => b.callback_data), ["s|isi", "s|pss10"]);
+  assert.doesNotMatch(rows[1][0].text, /🔒/, "nothing is locked during the trial");
+});
+
+test("paywall: the sleep and stress scales run during the trial and lock after it", () => {
+  const h = harness();
+  h.say("/start");
+  assert.match(lastText(h.say("/isi")), /Труднощі із засинанням/);
+  assert.equal(h.sessions.get(777, h.clock.now).instrumentId, "isi");
+  assert.match(lastText(h.say("/stress")), /останнього місяця|неочікувано/);
+
+  // Two weeks and a minute later.
+  h.clock.now += 14 * DAY + 60000;
+  const locked = h.say("/isi");
+  assert.match(lastText(locked), /Безкоштовний період закінчився/);
+  assert.match(lastText(locked), /100 зірок одноразово/);
+  assert.equal(h.sessions.size(), 0, "no session is started behind the paywall");
+  const button = locked[locked.length - 1].payload.reply_markup.inline_keyboard[0][0];
+  assert.equal(button.callback_data, "pay|start");
+
+  // The screening core stays free forever.
+  assert.match(lastText(h.say("/gad7")), /Чуття|Відчуття нервозності/);
+  assert.equal(h.sessions.get(777, h.clock.now).instrumentId, "gad7");
+  // And the keyboard now shows the locks.
+  const rows = h.say("/help")[0].payload.reply_markup.inline_keyboard;
+  assert.match(rows[1][0].text, /🔒/);
+});
+
+test("paywall: /buy shows the offer and the button asks Telegram for an invoice", () => {
+  const h = harness();
+  const offer = h.say("/buy");
+  assert.match(lastText(offer), /Повний доступ/);
+  assert.match(lastText(offer), /ISI/);
+  assert.match(lastText(offer), /назавжди безкоштовно/);
+
+  const tapped = h.tap("pay|start");
+  assert.deepEqual(methodsOf(tapped), ["answerCallbackQuery", "sendInvoice"]);
+  const invoice = tapped[1].payload;
+  assert.equal(invoice.currency, "XTR");
+  assert.deepEqual(invoice.prices, [{ label: "Повний доступ", amount: 100 }]);
+  assert.equal(invoice.payload, "pro-v1:777");
+});
+
+test("paywall: the pre-checkout query is answered, and a foreign payload is refused", () => {
+  const h = harness();
+  const ok = h.router.handleUpdate({
+    update_id: 20,
+    pre_checkout_query: { id: "pcq1", from: { id: 777 }, currency: "XTR", total_amount: 100, invoice_payload: "pro-v1:777" },
+  });
+  assert.deepEqual(methodsOf(ok), ["answerPreCheckoutQuery"]);
+  assert.equal(ok[0].payload.ok, true);
+  assert.equal(ok[0].payload.pre_checkout_query_id, "pcq1");
+
+  const foreign = h.router.handleUpdate({
+    update_id: 21,
+    pre_checkout_query: { id: "pcq2", from: { id: 777 }, currency: "XTR", total_amount: 100, invoice_payload: "pro-v1:999" },
+  });
+  assert.equal(foreign[0].payload.ok, false);
+  assert.match(foreign[0].payload.error_message, /Спробуйте ще раз/);
+});
+
+test("paywall: a successful payment unlocks everything for good", () => {
+  const h = harness();
+  h.say("/start");
+  h.clock.now += 20 * DAY;
+  assert.match(lastText(h.say("/isi")), /Безкоштовний період закінчився/);
+
+  const paid = h.router.handleUpdate({
+    update_id: 22,
+    message: {
+      message_id: 1,
+      chat: h.chat,
+      successful_payment: {
+        currency: "XTR",
+        total_amount: 100,
+        invoice_payload: "pro-v1:777",
+        telegram_payment_charge_id: "ch_live_1",
+      },
+    },
+  });
+  assert.match(lastText(paid), /повний доступ відкрито назавжди/);
+  assert.equal(h.store.user(777).pro.chargeId, "ch_live_1");
+  assert.equal(h.router.access(777).kind, "pro");
+
+  assert.match(lastText(h.say("/isi")), /Труднощі із засинанням/);
+  h.clock.now += 5 * 365 * DAY;
+  assert.equal(h.router.access(777).active, true, "a one-time purchase does not lapse");
+  assert.match(lastText(h.say("/buy")), /уже відкритий/);
+});
+
+test("paywall: free history is capped, full history comes with the purchase", () => {
+  const h = harness();
+  h.say("/start");
+  for (let run = 0; run < 12; run++) {
+    h.store.addResult(777, buildResult(GAD7, [1, 1, 1, 1, 1, 1, 1], WED_NOON_UTC - run * WEEK_MS));
+  }
+  h.clock.now += 20 * DAY;
+  const limited = lastText(h.say("/results"));
+  assert.match(limited, /показані останні 8 з 12/);
+  assert.match(limited, /Повна історія входить у повний доступ/);
+
+  applyPayment(h.store, 777, { currency: "XTR", total_amount: 100, telegram_payment_charge_id: "ch_2" }, h.clock.now);
+  const full = lastText(h.say("/results"));
+  assert.doesNotMatch(full, /показані останні/);
+  assert.doesNotMatch(full, /повний доступ/);
+});
+
+test("paywall: /paysupport explains the refund and what stays free", () => {
+  const h = harness();
+  const text = lastText(h.say("/paysupport"));
+  assert.match(text, /одноразова покупка/);
+  assert.match(text, /Повернення можливе протягом 14 днів/);
+  assert.match(text, /результати залишаться/);
+  assert.match(text, /GAD-7 і PHQ-9/);
+});
+
+test("paywall: the window is told the state, and the bot still refuses a locked result", () => {
+  const h = harness({ config: { webappUrl: "https://example.pages.dev/" } });
+  h.say("/start");
+  assert.equal(h.say("/app")[0].payload.reply_markup.keyboard[0][0].web_app.url,
+    "https://example.pages.dev/?pro=1");
+  h.clock.now += 20 * DAY;
+  assert.equal(h.say("/app")[0].payload.reply_markup.keyboard[0][0].web_app.url,
+    "https://example.pages.dev/?pro=0");
+
+  // An edited client can still submit a locked scale: the bot is the gate.
+  const submitted = h.router.handleUpdate({
+    update_id: 23,
+    message: {
+      message_id: 1,
+      chat: h.chat,
+      web_app_data: {
+        data: JSON.stringify({ v: 1, type: "result", instrument: "isi", answers: [4, 4, 4, 4, 4, 4, 4] }),
+      },
+    },
+  });
+  assert.match(lastText(submitted), /Повний доступ/);
+  assert.equal(h.store.history(777, "isi").length, 0, "nothing is stored behind the paywall");
+
+  applyPayment(h.store, 777, { currency: "XTR", total_amount: 100, telegram_payment_charge_id: "ch_3" }, h.clock.now);
+  h.router.handleUpdate({
+    update_id: 24,
+    message: {
+      message_id: 1,
+      chat: h.chat,
+      web_app_data: {
+        data: JSON.stringify({ v: 1, type: "result", instrument: "isi", answers: [4, 4, 4, 4, 4, 4, 4] }),
+      },
+    },
+  });
+  assert.equal(h.store.lastResult(777, "isi").score, 28);
+});
+
+test("paywall: a full stress run through the keyboard scores the reversed items", () => {
+  const h = harness();
+  h.say("/start");
+  const finished = completeViaKeyboard(h, PSS10, [4, 4, 4, 0, 0, 4, 0, 0, 4, 4]);
+  assert.match(scoreText(finished), /Бали: <b>40<\/b> з 40/);
+  assert.match(scoreText(finished), /високий стрес/);
+  assert.equal(h.store.lastResult(777, "pss10").score, 40);
+});
+
 // --------------------------------------------------------------- mini app
 
 test("webapp: the app's copy of the questionnaires is identical to the bot's", () => {
@@ -1155,7 +1467,8 @@ test("webapp: /start offers the launch button only when a URL is configured", ()
   const withApp = harness({ config: { webappUrl: "https://example.pages.dev/" } });
   const started = withApp.say("/start");
   const keyboard = started[0].payload.reply_markup.keyboard;
-  assert.equal(keyboard[0][0].web_app.url, "https://example.pages.dev/");
+  // The lock state rides along in the query string as a hint for the window.
+  assert.equal(keyboard[0][0].web_app.url, "https://example.pages.dev/?pro=1");
   assert.match(keyboard[0][0].text, /Відкрити застосунок/);
   assert.equal(started[0].payload.reply_markup.is_persistent, true);
   assert.match(lastText(started), /вікно поверх чату/);

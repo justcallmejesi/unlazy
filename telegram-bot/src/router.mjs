@@ -6,6 +6,7 @@
 
 import { escapeHtml } from "./telegram.mjs";
 import { INSTRUMENT_LIST, buildResult, getInstrument } from "./instruments.mjs";
+import { applyPayment, checkPreCheckout, ensureTrial, entitlement, invoiceFor } from "./billing.mjs";
 import {
   formatTimeOfDay, nextDueAfter, parseTimeOfDay, parseUtcOffset, resolveSchedule,
 } from "./reminders.mjs";
@@ -13,11 +14,16 @@ import {
   aboutText, answerKeyboard, appIntro, appKeyboard, appRejected, appResultSaved, exportMessage,
   greeting, helpText, historyMessage, lastMessage, noteKeyboard, noteQuestion, noteSaved,
   noteSkipped, questionText, reminderStatus, resultMessage, startKeyboard, unknownInput,
-  weekdayWords,
+  alreadyPro, buyKeyboard, paySupport, paywall, purchaseThanks, trialNotice, weekdayWords,
 } from "./texts.mjs";
 import { parseWebAppPayload } from "./webapp.mjs";
 
 const HTML = { parse_mode: "HTML" };
+// How much history a chat sees without the full access.
+const FREE_HISTORY_LIMIT = 8;
+// Commands that start a questionnaire, mapped to their instrument.
+const INSTRUMENT_COMMANDS = {};
+INSTRUMENT_LIST.forEach((instrument) => { INSTRUMENT_COMMANDS[instrument.command.slice(1)] = instrument; });
 const PRIVATE_ONLY =
   "Опитувальники доступні лише в особистому чаті з ботом: відповіді про самопочуття не варто публікувати в групі. " +
   "Напишіть мені в особисті повідомлення.";
@@ -63,8 +69,26 @@ export function createRouter(context) {
 
   // The schedule, not a bare offset: it carries the weekday, the time and
   // either a zone or a fixed offset, and dates resolve their own offset.
+  function appUrl(state) {
+    if (!config.webappUrl) return null;
+    const separator = config.webappUrl.indexOf("?") === -1 ? "?" : "&";
+    return config.webappUrl + separator + "pro=" + (state.active ? "1" : "0");
+  }
+
   function scheduleFor(chatId) {
     return resolveSchedule(store.hasUser(chatId) ? store.user(chatId) : null, config.reminder);
+  }
+
+  function access(chatId) {
+    return entitlement(store.hasUser(chatId) ? store.user(chatId) : null, now());
+  }
+
+  function startTrialFor(chatId) {
+    return ensureTrial(store, chatId, now(), config.price.trialDays);
+  }
+
+  function locked(chatId, state) {
+    return [send(chatId, paywall(config.price, state), { reply_markup: buyKeyboard(config.price) })];
   }
 
   function reminderLine(chatId) {
@@ -82,6 +106,10 @@ export function createRouter(context) {
   function startInstrument(chatId, instrument) {
     const user = store.user(chatId);
     if (!user.firstSeenAt) store.updateUser(chatId, { firstSeenAt: new Date(now()).toISOString() });
+    startTrialFor(chatId);
+    const state = access(chatId);
+    // The two screening scales are always free; sleep and stress are not.
+    if (instrument.paid && !state.active) return locked(chatId, state);
     const session = sessions.start(chatId, instrument, now());
     return [
       send(chatId, "<b>" + escapeHtml(instrument.title) + "</b>, " + escapeHtml(instrument.subtitle) +
@@ -111,8 +139,11 @@ export function createRouter(context) {
     sessions.clearNote(chatId);
     const annotated = store.annotateResult(chatId, pending.result, text);
     // The result can be gone: /delete, or 200 newer runs pushing it out.
-    if (!annotated || !annotated.note) return [send(chatId, noteSkipped(), { reply_markup: startKeyboard() })];
-    return [send(chatId, noteSaved(annotated.note), { reply_markup: startKeyboard() })];
+    const unlocked = access(chatId).active;
+    if (!annotated || !annotated.note) {
+      return [send(chatId, noteSkipped(), { reply_markup: startKeyboard(unlocked) })];
+    }
+    return [send(chatId, noteSaved(annotated.note), { reply_markup: startKeyboard(unlocked) })];
   }
 
   // Records one answer and returns the follow-up messages.
@@ -182,14 +213,23 @@ export function createRouter(context) {
 
   function handleCommand(chatId, parsed, message) {
     const { command, args } = parsed;
+    if (Object.prototype.hasOwnProperty.call(INSTRUMENT_COMMANDS, command)) {
+      // Starting a questionnaire always replaces whatever was in progress.
+      sessions.cancel(chatId);
+      sessions.clearNote(chatId);
+      return startInstrument(chatId, INSTRUMENT_COMMANDS[command]);
+    }
     switch (command) {
       case "start": {
         if (!store.user(chatId).firstSeenAt) {
           store.updateUser(chatId, { firstSeenAt: new Date(now()).toISOString() });
         }
-        const hello = send(chatId, greeting(message && message.from && message.from.first_name, scheduleFor(chatId)), {
-          reply_markup: config.webappUrl ? appKeyboard(config.webappUrl) : startKeyboard(),
-        });
+        startTrialFor(chatId);
+        const state = access(chatId);
+        const hello = send(chatId,
+          greeting(message && message.from && message.from.first_name, scheduleFor(chatId),
+            trialNotice(state, config.price)),
+          { reply_markup: config.webappUrl ? appKeyboard(appUrl(state)) : startKeyboard(state.active) });
         // Without the app the chat flow is the whole product, so the inline
         // start buttons stay the entry point.
         return config.webappUrl ? [hello, send(chatId, appIntro())] : [hello];
@@ -198,28 +238,37 @@ export function createRouter(context) {
         if (!config.webappUrl) {
           return [send(chatId, "Застосунок не налаштований. Опитувальники доступні тут: /gad7, /phq9.")];
         }
-        return [send(chatId, appIntro(), { reply_markup: appKeyboard(config.webappUrl) })];
+        startTrialFor(chatId);
+        return [send(chatId, appIntro(), { reply_markup: appKeyboard(appUrl(access(chatId))) })];
       case "help":
-        return [send(chatId, helpText(), { reply_markup: startKeyboard() })];
+        return [send(chatId, helpText(), { reply_markup: startKeyboard(access(chatId).active) })];
       case "about":
         return [send(chatId, aboutText(reminderLine(chatId)))];
-      case "gad7":
-      case "phq9":
-        // Starting a questionnaire always replaces whatever was in progress.
-        sessions.cancel(chatId);
-        sessions.clearNote(chatId);
-        return startInstrument(chatId, getInstrument(command));
+      case "buy": {
+        startTrialFor(chatId);
+        const state = access(chatId);
+        if (state.kind === "pro") return [send(chatId, alreadyPro())];
+        return locked(chatId, state);
+      }
+      case "paysupport":
+        return [send(chatId, paySupport(config.price))];
       case "cancel": {
         const hadSession = sessions.cancel(chatId);
         const hadNote = sessions.clearNote(chatId);
         if (hadSession) return [send(chatId, "Опитувальник перервано. Відповіді не збережені.")];
-        if (hadNote) return [send(chatId, noteSkipped(), { reply_markup: startKeyboard() })];
+        if (hadNote) return [send(chatId, noteSkipped(), { reply_markup: startKeyboard(access(chatId).active) })];
         return [send(chatId, "Немає чого перервати.")];
       }
-      case "results":
-        return [send(chatId, historyMessage(store, chatId, scheduleFor(chatId)), { reply_markup: startKeyboard() })];
+      case "results": {
+        const state = access(chatId);
+        const limit = state.active ? Infinity : FREE_HISTORY_LIMIT;
+        const body = historyMessage(store, chatId, scheduleFor(chatId), limit);
+        const tail = state.active ? "" : "\n\nПовна історія входить у повний доступ: /buy";
+        return [send(chatId, body + tail, { reply_markup: startKeyboard(state.active) })];
+      }
       case "last":
-        return [send(chatId, lastMessage(store, chatId, scheduleFor(chatId)), { reply_markup: startKeyboard() })];
+        return [send(chatId, lastMessage(store, chatId, scheduleFor(chatId)),
+          { reply_markup: startKeyboard(access(chatId).active) })];
       case "remind":
         return handleRemind(chatId, args);
       case "tz":
@@ -257,6 +306,13 @@ export function createRouter(context) {
 
     if (payload.type === "result") {
       const instrument = getInstrument(payload.instrumentId);
+      startTrialFor(chatId);
+      const state = access(chatId);
+      // The window is only a hint about what is unlocked; this is the check
+      // that actually decides, so an edited client changes nothing.
+      if (instrument.paid && !state.active) {
+        return { actions: locked(chatId, state), payload, rejected: "locked" };
+      }
       const result = buildResult(instrument, payload.answers, now());
       const previous = store.lastResult(chatId, instrument.id);
       const stored = store.addResult(chatId, result);
@@ -293,6 +349,39 @@ export function createRouter(context) {
     };
   }
 
+  function handleInvoice(chatId) {
+    startTrialFor(chatId);
+    if (access(chatId).kind === "pro") return [send(chatId, alreadyPro())];
+    return [{ method: "sendInvoice", payload: invoiceFor(chatId, config.price) }];
+  }
+
+  // Telegram cancels the payment if this is not answered within ten seconds,
+  // so it does no work beyond checking that the invoice is ours.
+  function handlePreCheckout(query) {
+    const chatId = query && query.from ? query.from.id : null;
+    const verdict = checkPreCheckout(query, chatId);
+    if (verdict.ok) {
+      return [{ method: "answerPreCheckoutQuery", payload: { pre_checkout_query_id: query.id, ok: true } }];
+    }
+    return [{
+      method: "answerPreCheckoutQuery",
+      payload: {
+        pre_checkout_query_id: query && query.id,
+        ok: false,
+        error_message: "Не вдалося підтвердити платіж. Спробуйте ще раз через /buy.",
+      },
+    }];
+  }
+
+  function handleSuccessfulPayment(chatId, payment) {
+    const record = applyPayment(store, chatId, payment, now());
+    if (!record) return [send(chatId, "Платіж отримано, але я не зміг його прочитати. Напишіть у /paysupport.")];
+    const state = access(chatId);
+    return [send(chatId, purchaseThanks(config.price), {
+      reply_markup: config.webappUrl ? appKeyboard(appUrl(state)) : startKeyboard(true),
+    })];
+  }
+
   function handleMessage(message) {
     const chat = message.chat || {};
     const chatId = chat.id;
@@ -302,6 +391,7 @@ export function createRouter(context) {
     if (chat.type && chat.type !== "private") {
       return parsed ? [send(chatId, PRIVATE_ONLY)] : [];
     }
+    if (message.successful_payment) return handleSuccessfulPayment(chatId, message.successful_payment);
     if (message.web_app_data) return handleWebAppData(chatId, message.web_app_data.data).actions;
     if (parsed) return handleCommand(chatId, parsed, message);
     // An open question is waiting: this message is the answer to it. Checked
@@ -361,11 +451,14 @@ export function createRouter(context) {
       if (parts[1] === "on") return [ack(query.id)].concat(handleRemind(chatId, "on"));
       return [ack(query.id), send(chatId, reminderLine(chatId))];
     }
+    if (parts[0] === "pay") {
+      return [ack(query.id)].concat(handleInvoice(chatId));
+    }
     if (parts[0] === "n") {
       const pending = sessions.pendingNote(chatId, now());
       if (!pending || pending.id !== parts[1]) return [ack(query.id)];
       sessions.clearNote(chatId);
-      return [ack(query.id), send(chatId, noteSkipped(), { reply_markup: startKeyboard() })];
+      return [ack(query.id), send(chatId, noteSkipped(), { reply_markup: startKeyboard(access(chatId).active) })];
     }
     if (parts[0] === "del") {
       if (parts[1] === "yes") {
@@ -383,15 +476,16 @@ export function createRouter(context) {
     if (!update || typeof update !== "object") return [];
     if (update.message) return handleMessage(update.message);
     if (update.callback_query) return handleCallback(update.callback_query);
+    if (update.pre_checkout_query) return handlePreCheckout(update.pre_checkout_query);
     return [];
   }
 
   function reminderActions(chatId, text) {
-    return [send(chatId, text, { reply_markup: startKeyboard() })];
+    return [send(chatId, text, { reply_markup: startKeyboard(access(chatId).active) })];
   }
 
   return {
-    handleUpdate, handleMessage, handleCallback, handleWebAppData, reminderActions,
-    instruments: INSTRUMENT_LIST,
+    handleUpdate, handleMessage, handleCallback, handleWebAppData, handlePreCheckout,
+    reminderActions, access, instruments: INSTRUMENT_LIST,
   };
 }

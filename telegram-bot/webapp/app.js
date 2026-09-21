@@ -10,10 +10,12 @@
 // readable without any backend, which is the only reason this app needs nothing
 // but static hosting.
 
-import { GAD7, PHQ9, buildResult, severityOf } from "./instruments.mjs";
+import { INSTRUMENTS, INSTRUMENT_LIST, buildResult, severityOf } from "./instruments.mjs";
 
-const INSTRUMENTS = { gad7: GAD7, phq9: PHQ9 };
-const SERIES_COLOR = { gad7: "var(--series-gad7)", phq9: "var(--series-phq9)" };
+// One accent for every chart. Each scale gets its own plot with its own title
+// and its own axis, so colour is decoration here, not identity: four hues
+// would fail the colour-blind separation floors for no gain.
+const SERIES = "var(--series)";
 const MAX_NOTE_LENGTH = 1000;
 const RESULT_PREFIX = "r_";
 const SETTINGS_KEY = "s_settings";
@@ -21,6 +23,11 @@ const PAYLOAD_VERSION = 1;
 
 const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 const $ = (id) => document.getElementById(id);
+
+// The bot puts ?pro=1 or ?pro=0 in the launch URL. It is only a hint for what
+// to show: the bot itself refuses to store a locked result, so editing this
+// changes nothing but the labels.
+const UNLOCKED = new URLSearchParams(window.location.search).get("pro") !== "0";
 
 // ----------------------------------------------------------------- platform
 
@@ -185,7 +192,10 @@ function saveResultLocally(result) {
 
 // ----------------------------------------------------------------- state
 
-const state = { screen: "home", instrument: null, answers: [], index: 0, note: "", result: null, results: [] };
+const state = {
+  screen: "home", instrument: null, answers: [], index: 0, note: "", result: null, results: [],
+  unlocked: UNLOCKED,
+};
 
 function show(name) {
   state.screen = name;
@@ -197,6 +207,56 @@ function show(name) {
     if (name === "home") tg.BackButton.hide();
     else tg.BackButton.show();
   }
+}
+
+// ----------------------------------------------------------------- home
+
+const SCALE_ICON = '<svg class="glyph scale" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+  'stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="8"/></svg>';
+
+function minutesFor(instrument) {
+  const count = instrument.items.length;
+  if (count <= 7) return "близько хвилини";
+  if (count <= 10) return "близько двох хвилин";
+  return "кілька хвилин";
+}
+
+function renderHome() {
+  const menu = $("home-menu");
+  Array.prototype.slice.call(menu.querySelectorAll("[data-instrument]")).forEach((node) => node.remove());
+  // Built back to front and inserted at the top, so the scales stay above the
+  // fixed cards in the order instruments.mjs declares them.
+  INSTRUMENT_LIST.slice().reverse().forEach((instrument) => {
+    const locked = Boolean(instrument.paid) && !state.unlocked;
+    const button = document.createElement("button");
+    button.className = "menu-item" + (locked ? " locked" : "");
+    button.type = "button";
+    button.setAttribute("data-instrument", instrument.id);
+    button.innerHTML = SCALE_ICON;
+    const body = document.createElement("span");
+    body.className = "body";
+    const title = document.createElement("span");
+    title.className = "title";
+    title.textContent = instrument.title + " · " + instrument.subtitle;
+    const hint = document.createElement("span");
+    hint.className = "hint";
+    hint.textContent = instrument.items.length + " питань, " + minutesFor(instrument);
+    body.appendChild(title);
+    body.appendChild(hint);
+    const tail = document.createElement("span");
+    tail.className = locked ? "lock" : "chev";
+    tail.textContent = locked ? "🔒" : "›";
+    button.appendChild(body);
+    button.appendChild(tail);
+    button.addEventListener("click", () => {
+      if (locked) {
+        window.alert("Ця шкала входить у повний доступ. Відкрийте його в чаті командою /buy.");
+        return;
+      }
+      startQuiz(instrument.id);
+    });
+    menu.insertBefore(button, menu.firstElementChild);
+  });
 }
 
 // ----------------------------------------------------------------- quiz
@@ -329,7 +389,7 @@ function renderChart(container, instrument, entries) {
   const pad = { top: 12, right: 30, bottom: 22, left: 26 };
   const plotW = width - pad.left - pad.right;
   const plotH = height - pad.top - pad.bottom;
-  const color = SERIES_COLOR[instrument.id];
+  const color = SERIES;
 
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", "0 0 " + width + " " + height);
@@ -445,7 +505,7 @@ function renderChart(container, instrument, entries) {
 
 function renderTiles(container, results) {
   container.textContent = "";
-  [GAD7, PHQ9].forEach((instrument) => {
+  INSTRUMENT_LIST.forEach((instrument) => {
     const entries = results.filter((entry) => entry.instrument === instrument.id);
     const last = entries[entries.length - 1];
     const previous = entries[entries.length - 2];
@@ -453,10 +513,7 @@ function renderTiles(container, results) {
     tile.className = "tile";
     const label = document.createElement("div");
     label.className = "tile-label";
-    const swatch = document.createElement("span");
-    swatch.className = "swatch";
-    swatch.style.background = SERIES_COLOR[instrument.id];
-    label.appendChild(swatch);
+    // The title is the identity, not a colour chip.
     label.appendChild(document.createTextNode(instrument.title));
     const value = document.createElement("div");
     value.className = "tile-value";
@@ -479,8 +536,21 @@ function renderTiles(container, results) {
 async function renderStats() {
   state.results = await loadResults();
   renderTiles($("stats-tiles"), state.results);
-  renderChart($("stats-gad7"), GAD7, state.results.filter((entry) => entry.instrument === "gad7"));
-  renderChart($("stats-phq9"), PHQ9, state.results.filter((entry) => entry.instrument === "phq9"));
+  const locked = $("stats-locked");
+  locked.hidden = state.unlocked;
+  if (!state.unlocked) {
+    locked.textContent = "Повна статистика і шкали сну та стресу входять у повний доступ. " +
+      "Відкрийте його в чаті командою /buy.";
+  }
+  const charts = $("stats-charts");
+  charts.textContent = "";
+  INSTRUMENT_LIST.forEach((instrument) => {
+    if (instrument.paid && !state.unlocked) return;
+    const card = document.createElement("div");
+    card.className = "card";
+    charts.appendChild(card);
+    renderChart(card, instrument, state.results.filter((entry) => entry.instrument === instrument.id));
+  });
 }
 
 async function renderHistory() {
@@ -611,10 +681,6 @@ async function importFromChat() {
 Array.prototype.forEach.call(document.querySelectorAll("[data-go]"), (node) => {
   node.addEventListener("click", () => {
     const target = node.getAttribute("data-go");
-    if (target === "quiz") {
-      startQuiz(node.getAttribute("data-instrument"));
-      return;
-    }
     if (target === "stats") renderStats();
     if (target === "history") renderHistory();
     if (target === "reminders") renderReminders();
@@ -673,4 +739,5 @@ $("data-delete").addEventListener("click", async () => {
 });
 
 ready();
+renderHome();
 loadResults().then((results) => { state.results = results; });

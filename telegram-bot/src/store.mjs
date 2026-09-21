@@ -31,6 +31,8 @@ function defaultUser(chatId) {
     reminderTime: null,
     tzOffsetMinutes: null,
     lastRemindedAt: 0,
+    trialEndsAt: null,
+    pro: null,
     results: [],
   };
 }
@@ -43,6 +45,12 @@ function normalizeUser(chatId, raw) {
   user.reminderTime = typeof raw.reminderTime === "string" ? raw.reminderTime : null;
   user.tzOffsetMinutes = Number.isInteger(raw.tzOffsetMinutes) ? raw.tzOffsetMinutes : null;
   user.lastRemindedAt = Number.isFinite(raw.lastRemindedAt) ? Number(raw.lastRemindedAt) : 0;
+  user.trialEndsAt = Number.isFinite(raw.trialEndsAt) ? Number(raw.trialEndsAt) : null;
+  // A purchase is only honoured with the charge id Telegram issued, which is
+  // also what a refund needs. A hand-written "pro": true grants nothing.
+  user.pro = raw.pro && typeof raw.pro === "object" && typeof raw.pro.chargeId === "string" && raw.pro.chargeId
+    ? { since: String(raw.pro.since || ""), stars: Number(raw.pro.stars) || 0, chargeId: raw.pro.chargeId }
+    : null;
   // A result without an instrument id or a numeric score cannot be displayed
   // or compared, so it is dropped rather than rendered as "undefined".
   user.results = Array.isArray(raw.results)
