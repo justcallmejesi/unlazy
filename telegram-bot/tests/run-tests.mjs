@@ -1717,9 +1717,15 @@ test("deploy: the unit, the installer and the guide agree on every path", () => 
   assert.match(guide, new RegExp(envFile.replace(/\//g, "/")));
 
   // The env template must name the variables the bot actually reads.
-  ["BOT_TOKEN", "DATA_FILE", "REMINDER_TIME", "REMINDER_UTC_OFFSET", "WEBAPP_URL"].forEach((key) => {
+  ["BOT_TOKEN", "DATA_FILE", "REMINDER_TIME", "REMINDER_WEEKDAY", "REMINDER_ZONE", "WEBAPP_URL"].forEach((key) => {
     assert.match(installer, new RegExp("^" + key + "=", "m"), key + " missing from the env template");
   });
+  // The template must match the documented default slot, and must not pin a
+  // fixed offset: that would opt the server out of the seasonal changes.
+  assert.match(installer, /^REMINDER_TIME=19:00$/m);
+  assert.match(installer, /^REMINDER_WEEKDAY=1$/m);
+  assert.match(installer, /^REMINDER_ZONE=Europe\/Kyiv$/m);
+  assert.doesNotMatch(installer, /^REMINDER_UTC_OFFSET=.+$/m);
   // V8 needs writable executable memory, so this hardening switch must stay off.
   assert.doesNotMatch(unit, /^MemoryDenyWriteExecute=yes/m);
   assert.match(unit, /ProtectSystem=strict/);

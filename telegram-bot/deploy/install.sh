@@ -90,9 +90,12 @@ BOT_TOKEN=
 # Results snapshot. StateDirectory in the unit creates this directory.
 DATA_FILE=/var/lib/gad7-phq9-bot/results.json
 
-# Kyiv: +3 in summer, +2 from late October to late March.
-REMINDER_TIME=10:00
-REMINDER_UTC_OFFSET=+3
+# Weekly note slot: Monday 19:00 Kyiv time. The zone database resolves +2 in
+# winter and +3 in summer, so the March and October transitions need nothing.
+# Set REMINDER_UTC_OFFSET only to pin a fixed offset and opt out of that.
+REMINDER_TIME=19:00
+REMINDER_WEEKDAY=1
+REMINDER_ZONE=Europe/Kyiv
 
 # https address of the Mini App once it is deployed. Leave empty for chat only.
 WEBAPP_URL=
