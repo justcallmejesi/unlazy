@@ -3,7 +3,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseTimeOfDay, parseUtcOffset } from "./reminders.mjs";
+import { parseTimeOfDay, parseUtcOffset, zoneOffsetMinutes } from "./reminders.mjs";
 
 const BOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TOKEN_SHAPE = /^\d{6,}:[A-Za-z0-9_-]{30,}$/;
@@ -64,15 +64,30 @@ export function loadConfig(env = process.env, options = {}) {
     throw new Error("BOT_TOKEN does not look like a Telegram token (digits, a colon, then the secret).");
   }
 
-  const time = String(env.REMINDER_TIME || "10:00").trim();
-  if (!parseTimeOfDay(time)) throw new Error("REMINDER_TIME must be ЧЧ:ММ, for example 10:00");
-  // Kyiv time: +3 during summer time, +2 from the last Sunday of October to
-  // the last Sunday of March. Scheduling uses fixed offsets, so this default
-  // needs changing at each transition, or each user sets their own with /tz.
-  const rawOffset = String(env.REMINDER_UTC_OFFSET === undefined ? "+3" : env.REMINDER_UTC_OFFSET).trim();
-  const offsetMinutes = parseUtcOffset(rawOffset);
-  if (offsetMinutes === null) {
-    throw new Error("REMINDER_UTC_OFFSET must be an offset such as +3 for Kyiv summer time or +2 for winter");
+  const time = String(env.REMINDER_TIME || "19:00").trim();
+  if (!parseTimeOfDay(time)) throw new Error("REMINDER_TIME must be HH:MM, for example 19:00");
+
+  const rawWeekday = String(env.REMINDER_WEEKDAY === undefined ? "1" : env.REMINDER_WEEKDAY).trim();
+  const weekday = Number(rawWeekday);
+  if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) {
+    throw new Error("REMINDER_WEEKDAY must be 0 for Sunday through 6 for Saturday, default 1 for Monday");
+  }
+
+  // The zone carries the seasonal rule, so the local send hour survives the
+  // March and October transitions without anyone editing anything.
+  const zone = String(env.REMINDER_ZONE || "Europe/Kyiv").trim();
+  if (zone && zoneOffsetMinutes(zone, Date.now()) === null) {
+    throw new Error("REMINDER_ZONE " + zone + " is unknown to this runtime. Use REMINDER_UTC_OFFSET for a fixed offset.");
+  }
+
+  // An explicit offset overrides the zone and then follows no seasonal rule,
+  // which is occasionally what an operator wants.
+  let offsetMinutes = null;
+  if (env.REMINDER_UTC_OFFSET !== undefined && String(env.REMINDER_UTC_OFFSET).trim() !== "") {
+    offsetMinutes = parseUtcOffset(String(env.REMINDER_UTC_OFFSET).trim());
+    if (offsetMinutes === null) {
+      throw new Error("REMINDER_UTC_OFFSET must be an offset such as +2 or -05:30, or empty to use REMINDER_ZONE");
+    }
   }
 
   // Telegram only opens a Mini App over https, so a wrong scheme is rejected
@@ -100,6 +115,10 @@ export function loadConfig(env = process.env, options = {}) {
     crisisContact: String(env.CRISIS_CONTACT || DEFAULT_CRISIS_CONTACT),
     reminder: {
       time,
+      weekday,
+      // Exactly one of these two is set: an explicit offset wins, otherwise
+      // the zone resolves the offset per instant.
+      zone: offsetMinutes === null ? zone : null,
       offsetMinutes,
       graceMs: positiveNumber(env.REMINDER_GRACE_HOURS, 12, "REMINDER_GRACE_HOURS") * 60 * 60 * 1000,
     },

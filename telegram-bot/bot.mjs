@@ -16,7 +16,9 @@ import { Store } from "./src/store.mjs";
 import { SessionManager } from "./src/session.mjs";
 import { createRouter } from "./src/router.mjs";
 import { COMMANDS, weeklyReminder } from "./src/texts.mjs";
-import { dueReminders, formatLocalDateTime, nextDueAfter, resolveSchedule } from "./src/reminders.mjs";
+import {
+  dueReminders, formatLocalDateTime, lastDueBefore, nextDueAfter, offsetAt, resolveSchedule,
+} from "./src/reminders.mjs";
 
 const HELP = `usage: bot.mjs [--demo] [--help]
 
@@ -98,7 +100,8 @@ export class BotRuntime {
     });
     const reminded = [];
     for (const entry of due) {
-      const actions = this.router.reminderActions(entry.chatId, weeklyReminder(this.store, entry.chatId));
+      const actions = this.router.reminderActions(entry.chatId,
+        weeklyReminder(this.store, entry.chatId, entry.schedule));
       try {
         for (const action of actions) await this.client.call(action.method, action.payload);
         this.store.updateUser(entry.chatId, { lastRemindedAt: entry.dueAt });
@@ -168,10 +171,7 @@ export function buildBot(config) {
 }
 
 function demo() {
-  const config = loadConfig({ MEMORY_ONLY: "1", REMINDER_TIME: "10:00", REMINDER_UTC_OFFSET: "+3" }, {
-    allowMissingToken: true,
-    envFile: false,
-  });
+  const config = loadConfig({ MEMORY_ONLY: "1" }, { allowMissingToken: true, envFile: false });
   const { store, sessions, router } = buildBot(config);
   const chat = { id: 4242, type: "private" };
   const from = { id: 4242, first_name: "Демо" };
@@ -179,7 +179,7 @@ function demo() {
     .concat(["Тиждень був напружений: багато роботи і мало сну, але допомагали прогулянки"])
     .concat(["/phq9", "1", "2", "1", "3", "0", "1", "2", "0", "1", "2"])
     .concat(["Ближче до вихідних стало легше"])
-    .concat(["/last", "/results", "/remind 09:30", "/tz +3", "/remind"]);
+    .concat(["/last", "/results", "/remind 20:30", "/remind", "/tz +5", "/tz auto"]);
 
   script.forEach((text) => {
     console.log("\n>>> " + text);
@@ -189,18 +189,23 @@ function demo() {
     });
   });
 
-  const nowMs = Date.parse("2026-09-16T12:00:00Z");
   const schedule = resolveSchedule(store.user(chat.id), config.reminder);
-  console.log("\n>>> next Wednesday reminder: " +
-    formatLocalDateTime(nextDueAfter(nowMs, schedule), schedule.offsetMinutes) +
-    " (" + schedule.offsetMinutes + " minutes from UTC)");
+  // Both sides of a transition, to show the local hour holding steady.
+  [["summer", "2026-07-01T12:00:00Z"], ["winter", "2026-12-01T12:00:00Z"]].forEach(([label, iso]) => {
+    const nowMs = Date.parse(iso);
+    const due = nextDueAfter(nowMs, schedule);
+    console.log("\n>>> next reminder in " + label + ": " +
+      formatLocalDateTime(due, offsetAt(schedule, due)) +
+      " local, UTC offset " + offsetAt(schedule, due) + " minutes");
+  });
+  const slot = lastDueBefore(Date.parse("2026-09-16T12:00:00Z"), schedule);
   const due = dueReminders({
     users: store.allUsers(),
-    nowMs: Date.parse("2026-09-16T06:30:00Z"),
+    nowMs: slot + 60000,
     defaults: config.reminder,
     graceMs: config.reminder.graceMs,
   });
-  console.log(">>> due at Wednesday 09:30 MSK: " + JSON.stringify(due.map((entry) => entry.chatId)));
+  console.log(">>> due one minute after the Monday slot: " + JSON.stringify(due.map((entry) => entry.chatId)));
   console.log(">>> stored results: " + JSON.stringify(store.history(chat.id).map((entry) =>
     entry.instrument + "=" + entry.score)));
 }
@@ -256,8 +261,10 @@ async function main() {
 
   const runtime = new BotRuntime({ client, store, sessions, router, config });
   const defaults = resolveSchedule(null, config.reminder);
-  log("weekly reminder: Wednesday " + config.reminder.time + " default, next " +
-    formatLocalDateTime(nextDueAfter(Date.now(), defaults), defaults.offsetMinutes));
+  const nextDue = nextDueAfter(Date.now(), defaults);
+  log("weekly reminder: weekday " + defaults.weekday + " at " + config.reminder.time +
+    " " + (defaults.zone || "UTC offset " + defaults.offsetMinutes) +
+    ", next " + formatLocalDateTime(nextDue, offsetAt(defaults, nextDue)));
   runtime.startTicker();
 
   let shuttingDown = false;

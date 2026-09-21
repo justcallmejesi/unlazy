@@ -7,12 +7,13 @@
 import { escapeHtml } from "./telegram.mjs";
 import { INSTRUMENT_LIST, buildResult, getInstrument } from "./instruments.mjs";
 import {
-  formatTimeOfDay, formatUtcOffset, nextDueAfter, parseTimeOfDay, parseUtcOffset, resolveSchedule,
+  formatTimeOfDay, nextDueAfter, parseTimeOfDay, parseUtcOffset, resolveSchedule,
 } from "./reminders.mjs";
 import {
   aboutText, answerKeyboard, appIntro, appKeyboard, appRejected, appResultSaved, exportMessage,
   greeting, helpText, historyMessage, lastMessage, noteKeyboard, noteQuestion, noteSaved,
   noteSkipped, questionText, reminderStatus, resultMessage, startKeyboard, unknownInput,
+  weekdayWords,
 } from "./texts.mjs";
 import { parseWebAppPayload } from "./webapp.mjs";
 
@@ -60,8 +61,10 @@ export function createRouter(context) {
   const { store, sessions, config } = context;
   const now = typeof context.now === "function" ? context.now : () => Date.now();
 
-  function offsetFor(chatId) {
-    return resolveSchedule(store.hasUser(chatId) ? store.user(chatId) : null, config.reminder).offsetMinutes;
+  // The schedule, not a bare offset: it carries the weekday, the time and
+  // either a zone or a fixed offset, and dates resolve their own offset.
+  function scheduleFor(chatId) {
+    return resolveSchedule(store.hasUser(chatId) ? store.user(chatId) : null, config.reminder);
   }
 
   function reminderLine(chatId) {
@@ -95,9 +98,9 @@ export function createRouter(context) {
     const previous = store.lastResult(chatId, instrument.id);
     const stored = store.addResult(chatId, result);
     const pending = sessions.expectNote(chatId, instrument.id, stored, now());
-    const offsetMinutes = offsetFor(chatId);
+    const schedule = scheduleFor(chatId);
     return [
-      send(chatId, resultMessage(instrument, result, previous, offsetMinutes, config.crisisContact)),
+      send(chatId, resultMessage(instrument, result, previous, schedule, config.crisisContact)),
       send(chatId, noteQuestion(), { reply_markup: noteKeyboard(pending.id) }),
     ];
   }
@@ -152,21 +155,29 @@ export function createRouter(context) {
       if (!time) return [send(chatId, "Час потрібен у форматі ГГ:ХХ, наприклад /remind 09:30.")];
       // Stored in normal form so the snapshot never holds "9:05".
       store.updateUser(chatId, { reminderTime: formatTimeOfDay(time), remindersEnabled: true });
-      return [send(chatId, "Нагадуватиму щосереди.\n\n" + reminderLine(chatId))];
+      return [send(chatId, "Нагадуватиму " + weekdayWords(scheduleFor(chatId)).every + ".\n\n" +
+        reminderLine(chatId))];
     }
     return [send(chatId, reminderLine(chatId))];
   }
 
   function handleTimezone(chatId, args) {
-    if (!args) {
-      const schedule = resolveSchedule(store.user(chatId), config.reminder);
-      return [send(chatId, "Поточний часовий пояс: " + formatUtcOffset(schedule.offsetMinutes) +
-        "\nЗмінити: /tz +3 або /tz -05:30")];
+    if (!args) return [send(chatId, reminderLine(chatId) +
+      "\n\nВласний зсув: /tz +3 або /tz -05:30. Повернути автоматичний: /tz auto.")];
+    if (/^(auto|авто)$/i.test(args)) {
+      if (!config.reminder.zone) {
+        return [send(chatId, "Автоматичний режим недоступний: сервер налаштований на фіксований зсув.")];
+      }
+      store.updateUser(chatId, { tzOffsetMinutes: null });
+      return [send(chatId, "Повернув автоматичний часовий пояс.\n\n" + reminderLine(chatId))];
     }
     const offsetMinutes = parseUtcOffset(args);
-    if (offsetMinutes === null) return [send(chatId, "Не зрозумів зсув. Приклади: /tz +3, /tz -05:30, /tz 0.")];
+    if (offsetMinutes === null) {
+      return [send(chatId, "Не зрозумів зсув. Приклади: /tz +3, /tz -05:30, /tz 0, /tz auto.")];
+    }
     store.updateUser(chatId, { tzOffsetMinutes: offsetMinutes });
-    return [send(chatId, "Часовий пояс збережено.\n\n" + reminderLine(chatId))];
+    return [send(chatId, "Зсув збережено. Він фіксований, переходи на літній час не враховуються.\n\n" +
+      reminderLine(chatId))];
   }
 
   function handleCommand(chatId, parsed, message) {
@@ -176,7 +187,7 @@ export function createRouter(context) {
         if (!store.user(chatId).firstSeenAt) {
           store.updateUser(chatId, { firstSeenAt: new Date(now()).toISOString() });
         }
-        const hello = send(chatId, greeting(message && message.from && message.from.first_name), {
+        const hello = send(chatId, greeting(message && message.from && message.from.first_name, scheduleFor(chatId)), {
           reply_markup: config.webappUrl ? appKeyboard(config.webappUrl) : startKeyboard(),
         });
         // Without the app the chat flow is the whole product, so the inline
@@ -206,9 +217,9 @@ export function createRouter(context) {
         return [send(chatId, "Немає чого перервати.")];
       }
       case "results":
-        return [send(chatId, historyMessage(store, chatId, offsetFor(chatId)), { reply_markup: startKeyboard() })];
+        return [send(chatId, historyMessage(store, chatId, scheduleFor(chatId)), { reply_markup: startKeyboard() })];
       case "last":
-        return [send(chatId, lastMessage(store, chatId, offsetFor(chatId)), { reply_markup: startKeyboard() })];
+        return [send(chatId, lastMessage(store, chatId, scheduleFor(chatId)), { reply_markup: startKeyboard() })];
       case "remind":
         return handleRemind(chatId, args);
       case "tz":
@@ -252,11 +263,11 @@ export function createRouter(context) {
       if (payload.note) store.annotateResult(chatId, stored, payload.note);
       sessions.cancel(chatId);
       sessions.clearNote(chatId);
-      const offsetMinutes = offsetFor(chatId);
+      const schedule = scheduleFor(chatId);
       return {
         actions: [
           send(chatId, appResultSaved(instrument, result)),
-          send(chatId, resultMessage(instrument, result, previous, offsetMinutes, config.crisisContact)),
+          send(chatId, resultMessage(instrument, result, previous, schedule, config.crisisContact)),
         ],
         payload,
       };
@@ -343,7 +354,7 @@ export function createRouter(context) {
       return [ack(query.id)].concat(startInstrument(chatId, instrument));
     }
     if (parts[0] === "h") {
-      return [ack(query.id), send(chatId, historyMessage(store, chatId, offsetFor(chatId)))];
+      return [ack(query.id), send(chatId, historyMessage(store, chatId, scheduleFor(chatId)))];
     }
     if (parts[0] === "r") {
       if (parts[1] === "off") return [ack(query.id)].concat(handleRemind(chatId, "off"));

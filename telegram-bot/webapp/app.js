@@ -531,6 +531,13 @@ async function renderHistory() {
 function fillTimezones(selected) {
   const box = $("rem-tz");
   box.textContent = "";
+  // Default: let the bot resolve Kyiv time per instant, so the send hour
+  // survives the March and October transitions without anyone touching this.
+  const auto = document.createElement("option");
+  auto.value = "auto";
+  auto.textContent = "Автоматично (Київ, з переходом на літній час)";
+  if (selected === "auto" || selected === null || selected === undefined) auto.selected = true;
+  box.appendChild(auto);
   for (let offset = -12 * 60; offset <= 14 * 60; offset += 30) {
     const option = document.createElement("option");
     const sign = offset < 0 ? "-" : "+";
@@ -547,8 +554,8 @@ function fillTimezones(selected) {
 async function renderReminders() {
   const settings = await loadSettings();
   $("rem-on").checked = settings.enabled !== false;
-  $("rem-time").value = typeof settings.time === "string" ? settings.time : "10:00";
-  fillTimezones(Number.isInteger(settings.tz) ? settings.tz : 180);
+  $("rem-time").value = typeof settings.time === "string" ? settings.time : "19:00";
+  fillTimezones(Number.isInteger(settings.tz) ? settings.tz : "auto");
 }
 
 async function renderData() {
@@ -645,10 +652,11 @@ $("result-send").addEventListener("click", () => {
 });
 
 $("rem-save").addEventListener("click", async () => {
+  const raw = $("rem-tz").value;
   const settings = {
     enabled: $("rem-on").checked,
-    time: $("rem-time").value || "10:00",
-    tz: Number($("rem-tz").value),
+    time: $("rem-time").value || "19:00",
+    tz: raw === "auto" ? "auto" : Number(raw),
   };
   await storageSet(SETTINGS_KEY, JSON.stringify(settings));
   submit({ type: "reminders", enabled: settings.enabled, time: settings.time, tz: settings.tz });

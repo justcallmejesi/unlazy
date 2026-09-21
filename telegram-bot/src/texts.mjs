@@ -5,8 +5,31 @@
 
 import { escapeHtml } from "./telegram.mjs";
 import { INSTRUMENT_LIST, getInstrument, severityOf } from "./instruments.mjs";
-import { formatLocalDateTime, formatTimeOfDay, formatUtcOffset } from "./reminders.mjs";
+import { formatLocalDateTime, formatTimeOfDay, formatUtcOffset, offsetAt } from "./reminders.mjs";
 import { MAX_NOTE_LENGTH } from "./store.mjs";
+
+// Nominative for naming the day, and the "every Monday" adverb form.
+export const WEEKDAY_NAMES = [
+  { name: "неділя", every: "щонеділі" },
+  { name: "понеділок", every: "щопонеділка" },
+  { name: "вівторок", every: "щовівторка" },
+  { name: "середа", every: "щосереди" },
+  { name: "четвер", every: "щочетверга" },
+  { name: "п'ятниця", every: "щоп'ятниці" },
+  { name: "субота", every: "щосуботи" },
+];
+
+export function weekdayWords(schedule) {
+  const index = schedule && Number.isInteger(schedule.weekday) ? schedule.weekday : 1;
+  return WEEKDAY_NAMES[((index % 7) + 7) % 7];
+}
+
+// Dates are rendered in the offset that was in effect at that very instant, so
+// a result taken in summer keeps its summer wall-clock time after the October
+// transition.
+function stampIn(schedule, timestampMs) {
+  return formatLocalDateTime(timestampMs, offsetAt(schedule, timestampMs));
+}
 
 export const DISCLAIMER =
   "Опитувальники GAD-7 і PHQ-9 це інструменти самоспостереження, а не діагноз. " +
@@ -18,8 +41,8 @@ export const COMMANDS = [
   { command: "phq9", description: "Пройти PHQ-9 (настрій, 9 питань)" },
   { command: "results", description: "Історія результатів" },
   { command: "last", description: "Останні результати" },
-  { command: "remind", description: "Нагадування щосереди: on, off або ГГ:ХХ" },
-  { command: "tz", description: "Часовий пояс, наприклад /tz +3" },
+  { command: "remind", description: "Нагадування: on, off або ГГ:ХХ" },
+  { command: "tz", description: "Часовий пояс: auto або, наприклад, /tz +3" },
   { command: "export", description: "Вивантажити мої дані у JSON" },
   { command: "delete", description: "Видалити всі мої дані" },
   { command: "cancel", description: "Перервати поточний опитувальник" },
@@ -36,8 +59,9 @@ export function crisisBlock(crisisContact) {
   ].join("\n");
 }
 
-export function greeting(name) {
+export function greeting(name, schedule) {
   const hello = name ? "Привіт, " + escapeHtml(name) + "!" : "Привіт!";
+  const words = weekdayWords(schedule);
   return [
     hello,
     "",
@@ -45,7 +69,8 @@ export function greeting(name) {
     "• <b>GAD-7</b>: 7 питань про тривогу",
     "• <b>PHQ-9</b>: 9 питань про настрій, плюс одне питання про те, як це ускладнювало життя",
     "",
-    "Результати зберігаються, щоб Ви бачили динаміку. Щосереди я нагадаю пройти тести знову.",
+    "Результати зберігаються, щоб Ви бачили динаміку. " +
+      escapeHtml(words.every.charAt(0).toUpperCase() + words.every.slice(1)) + " я нагадаю пройти тести знову.",
     "",
     DISCLAIMER,
     "",
@@ -147,7 +172,7 @@ export function startKeyboard() {
   };
 }
 
-export function resultMessage(instrument, result, previous, offsetMinutes, crisisContact) {
+export function resultMessage(instrument, result, previous, schedule, crisisContact) {
   const lines = [
     "<b>" + escapeHtml(instrument.title) + " готовий</b>",
     "",
@@ -159,7 +184,7 @@ export function resultMessage(instrument, result, previous, offsetMinutes, crisi
     const sign = delta > 0 ? "+" : "";
     const direction = delta === 0 ? "без змін" : sign + delta + " до минулого разу";
     lines.push("Динаміка: " + escapeHtml(direction) +
-      " (" + previous.score + " від " + formatLocalDateTime(Date.parse(previous.completedAt), offsetMinutes) + ")");
+      " (" + previous.score + " від " + stampIn(schedule, Date.parse(previous.completedAt)) + ")");
   }
   if (result.impairment !== null && result.impairment !== undefined) {
     const impairmentItem = instrument.items.find((item) => !item.scored);
@@ -223,14 +248,14 @@ function noteSnippet(note, limit = 90) {
   return escapeHtml(flat.length > limit ? flat.slice(0, limit) + "..." : flat);
 }
 
-export function historyMessage(store, chatId, offsetMinutes, limit = 10) {
+export function historyMessage(store, chatId, schedule, limit = 10) {
   const sections = INSTRUMENT_LIST.map((instrument) => {
     const entries = store.history(chatId, instrument.id, limit);
     if (!entries.length) {
       return "<b>" + escapeHtml(instrument.title) + "</b>\nще немає проходжень: " + instrument.command;
     }
     const rows = entries.map((entry) => {
-      const stamp = formatLocalDateTime(Date.parse(entry.completedAt), offsetMinutes);
+      const stamp = stampIn(schedule, Date.parse(entry.completedAt));
       const shape = describe(instrument, entry);
       const row = "• " + stamp + " : <b>" + entry.score + "</b>/" + shape.maxScore +
         " " + escapeHtml(shape.severity);
@@ -243,13 +268,13 @@ export function historyMessage(store, chatId, offsetMinutes, limit = 10) {
   return ["<b>Історія результатів</b>", ""].concat(sections.join("\n\n")).join("\n");
 }
 
-export function lastMessage(store, chatId, offsetMinutes) {
+export function lastMessage(store, chatId, schedule) {
   const rows = INSTRUMENT_LIST.map((instrument) => {
     const entry = store.lastResult(chatId, instrument.id);
     if (!entry) return "<b>" + escapeHtml(instrument.title) + "</b>: немає даних";
     const shape = describe(instrument, entry);
     const head = "<b>" + escapeHtml(instrument.title) + "</b>: " + entry.score + "/" + shape.maxScore +
-      " " + escapeHtml(shape.severity) + ", " + formatLocalDateTime(Date.parse(entry.completedAt), offsetMinutes);
+      " " + escapeHtml(shape.severity) + ", " + stampIn(schedule, Date.parse(entry.completedAt));
     return entry.note ? head + "\n<i>" + escapeHtml(entry.note) + "</i>" : head;
   });
   return ["<b>Останні результати</b>", ""].concat(rows).join("\n");
@@ -257,26 +282,33 @@ export function lastMessage(store, chatId, offsetMinutes) {
 
 export function reminderStatus(user, schedule, nextDueMs) {
   const state = user.remindersEnabled ? "увімкнені" : "вимкнені";
+  const offsetNow = offsetAt(schedule, nextDueMs);
+  const zoneNote = schedule.zone
+    ? escapeHtml(schedule.zone) + ", зараз " + formatUtcOffset(offsetNow) + ", перехід на літній час враховується"
+    : formatUtcOffset(offsetNow) + ", фіксований зсув";
   const lines = [
     "<b>Нагадування</b>: " + state,
-    "День: середа, час " + formatTimeOfDay(schedule) + " (" + formatUtcOffset(schedule.offsetMinutes) + ")",
+    "День: " + weekdayWords(schedule).name + ", час " + formatTimeOfDay(schedule),
+    "Часовий пояс: " + zoneNote,
   ];
   if (user.remindersEnabled) {
-    lines.push("Наступне: " + formatLocalDateTime(nextDueMs, schedule.offsetMinutes));
+    lines.push("Наступне: " + formatLocalDateTime(nextDueMs, offsetNow));
   }
   lines.push("");
-  lines.push("/remind off вимикає, /remind on вмикає, /remind 09:30 змінює час.");
-  lines.push("/tz +3 задає часовий пояс.");
+  lines.push("/remind off вимикає, /remind on вмикає, /remind 20:30 змінює час.");
+  lines.push("/tz +3 задає свій зсув, /tz auto повертає автоматичний.");
   return lines.join("\n");
 }
 
-export function weeklyReminder(store, chatId) {
+export function weeklyReminder(store, chatId, schedule) {
   const rows = INSTRUMENT_LIST.map((instrument) => {
     const entry = store.lastResult(chatId, instrument.id);
     if (!entry) return "• " + instrument.title + ": ще не проходили";
     return "• " + instrument.title + ": минулий бал " + entry.score + "/" + describe(instrument, entry).maxScore;
   });
-  return ["<b>Середа, час для перевірки</b>", "", "Пройдіть обидва опитувальники, це займе близько двох хвилин."]
+  const day = weekdayWords(schedule).name;
+  return ["<b>" + escapeHtml(day.charAt(0).toUpperCase() + day.slice(1)) + ", час для перевірки</b>", "",
+    "Пройдіть обидва опитувальники, це займе близько двох хвилин."]
     .concat(rows)
     .concat(["", "Вимкнути нагадування: /remind off"])
     .join("\n");

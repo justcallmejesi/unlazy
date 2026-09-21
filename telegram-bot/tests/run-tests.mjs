@@ -19,8 +19,9 @@ import { GAD7, PHQ9, buildResult, scoreAnswers, severityOf, riskFlagged } from "
 import { Store, MAX_NOTE_LENGTH, MAX_RESULTS_PER_USER } from "../src/store.mjs";
 import { SessionManager } from "../src/session.mjs";
 import {
-  DAY_MS, WEEK_MS, dueReminders, formatLocalDateTime, formatUtcOffset, lastDueBefore,
-  nextDueAfter, parseTimeOfDay, parseUtcOffset, resolveSchedule,
+  DAY_MS, MONDAY, WEDNESDAY, WEEK_MS, dueReminders, formatLocalDateTime, formatUtcOffset,
+  isEuSummerTime, lastDueBefore, lastSundayUtc, nextDueAfter, offsetAt, parseTimeOfDay,
+  parseUtcOffset, resolveSchedule, zoneOffsetMinutes,
 } from "../src/reminders.mjs";
 import { createRouter, parseAnswerCallback, parseCommand } from "../src/router.mjs";
 import { TelegramClient, TelegramError, escapeHtml } from "../src/telegram.mjs";
@@ -37,11 +38,15 @@ const test = (name, fn) => tests.push({ name, fn });
 
 const FAKE_TOKEN = "123456789:AAFakeTokenForTestsOnly_0123456789ab";
 const WED_NOON_UTC = Date.parse("2026-09-16T12:00:00Z"); // Wednesday
+// Monday 19:00 Kyiv is 16:00 UTC. Five minutes past the slot, inside the grace
+// window, is when a sweep is supposed to fire.
+const MONDAY_SLOT_UTC = Date.parse("2026-09-14T16:00:00Z");
+const JUST_AFTER_SLOT = MONDAY_SLOT_UTC + 5 * 60 * 1000;
 
 function fixtureConfig(overrides = {}) {
   return Object.assign({
     crisisContact: DEFAULT_CRISIS_CONTACT,
-    reminder: { time: "10:00", offsetMinutes: 180, graceMs: 12 * 60 * 60 * 1000 },
+    reminder: { time: "19:00", weekday: 1, zone: null, offsetMinutes: 180, graceMs: 12 * 60 * 60 * 1000 },
     pollTimeoutSeconds: 1,
     tickSeconds: 60,
     sessionIdleTimeoutMs: 60 * 60 * 1000,
@@ -289,10 +294,11 @@ test("store: a stored result with derived fields missing still renders", () => {
   const store = new Store({ file });
   store.load();
   assert.deepEqual(store.history(13).map((entry) => entry.instrument), ["gad7"]);
-  const text = historyMessage(store, 13, 180);
+  const schedule = { weekday: MONDAY, hour: 19, minute: 0, offsetMinutes: 180 };
+  const text = historyMessage(store, 13, schedule);
   assert.match(text, /<b>12<\/b>\/21 помірна тривога/);
   assert.doesNotMatch(text, /undefined/);
-  assert.doesNotMatch(lastMessage(store, 13, 180), /undefined/);
+  assert.doesNotMatch(lastMessage(store, 13, schedule), /undefined/);
 });
 
 test("store: the update offset only moves forward and forget removes a user", () => {
@@ -382,7 +388,7 @@ test("reminder: local Wednesday is honoured across the UTC date boundary", () =>
 });
 
 test("reminder: due list skips disabled, already reminded, and long overdue chats", () => {
-  const defaults = { time: "10:00", offsetMinutes: 180 };
+  const defaults = { time: "10:00", weekday: WEDNESDAY, offsetMinutes: 180 };
   const dueAt = Date.parse("2026-09-16T07:00:00Z");
   const users = [
     { chatId: 1, remindersEnabled: true, lastRemindedAt: 0 },
@@ -414,12 +420,98 @@ test("reminder: due list skips disabled, already reminded, and long overdue chat
 });
 
 test("reminder: per-user time and offset override the defaults", () => {
-  const defaults = { time: "10:00", offsetMinutes: 180 };
+  const defaults = { time: "10:00", weekday: WEDNESDAY, offsetMinutes: 180 };
   assert.deepEqual(resolveSchedule(null, defaults), { weekday: 3, hour: 10, minute: 0, offsetMinutes: 180 });
   assert.deepEqual(resolveSchedule({ reminderTime: "07:45", tzOffsetMinutes: 0 }, defaults),
     { weekday: 3, hour: 7, minute: 45, offsetMinutes: 0 });
   assert.deepEqual(resolveSchedule({ reminderTime: "bad" }, defaults),
     { weekday: 3, hour: 10, minute: 0, offsetMinutes: 180 });
+  // Monday 19:00 is the shipped default when nothing is configured.
+  assert.deepEqual(resolveSchedule(null, { zone: "Europe/Kyiv" }),
+    { weekday: MONDAY, hour: 19, minute: 0, zone: "Europe/Kyiv" });
+  // A user offset replaces the zone, which is how /tz opts out of the rule.
+  assert.deepEqual(resolveSchedule({ tzOffsetMinutes: -300 }, { zone: "Europe/Kyiv" }),
+    { weekday: MONDAY, hour: 19, minute: 0, offsetMinutes: -300 });
+});
+
+test("reminder: the Kyiv zone switches at the exact transition instants", () => {
+  const kyiv = (iso) => zoneOffsetMinutes("Europe/Kyiv", Date.parse(iso));
+  assert.equal(kyiv("2026-01-15T12:00:00Z"), 120, "winter is UTC+2");
+  assert.equal(kyiv("2026-07-15T12:00:00Z"), 180, "summer is UTC+3");
+  // 01:00 UTC on the last Sunday of March and of October.
+  assert.equal(kyiv("2026-03-29T00:59:00Z"), 120);
+  assert.equal(kyiv("2026-03-29T01:00:00Z"), 180);
+  assert.equal(kyiv("2026-10-25T00:59:00Z"), 180);
+  assert.equal(kyiv("2026-10-25T01:00:00Z"), 120);
+  assert.equal(zoneOffsetMinutes("Mars/Olympus", WED_NOON_UTC), null, "an unknown zone resolves to nothing");
+});
+
+test("reminder: the arithmetic EU rule matches the platform time-zone database", () => {
+  // The rule is the fallback for a Node built without full ICU. Comparing it
+  // against the database here keeps the two from disagreeing unnoticed.
+  assert.equal(lastSundayUtc(2026, 2, 1), Date.parse("2026-03-29T01:00:00Z"));
+  assert.equal(lastSundayUtc(2026, 9, 1), Date.parse("2026-10-25T01:00:00Z"));
+  assert.equal(lastSundayUtc(2027, 2, 1), Date.parse("2027-03-28T01:00:00Z"));
+  assert.equal(lastSundayUtc(2028, 9, 1), Date.parse("2028-10-29T01:00:00Z"));
+
+  let checked = 0;
+  for (let year = 2026; year <= 2029; year++) {
+    for (let day = 0; day < 365; day += 1) {
+      const ms = Date.UTC(year, 0, 1, 12) + day * DAY_MS;
+      const fromDatabase = zoneOffsetMinutes("Europe/Kyiv", ms);
+      if (fromDatabase === null) continue;
+      const fromRule = isEuSummerTime(ms) ? 180 : 120;
+      assert.equal(fromDatabase, fromRule, new Date(ms).toISOString());
+      checked++;
+    }
+  }
+  assert.ok(checked > 1400, "expected four years of daily samples, got " + checked);
+});
+
+test("reminder: a zoned slot keeps its local hour across both transitions", () => {
+  const schedule = { weekday: MONDAY, hour: 19, minute: 0, zone: "Europe/Kyiv" };
+  const localOf = (ms) => formatLocalDateTime(ms, offsetAt(schedule, ms));
+
+  // Sunday morning right after the October switch to winter time.
+  const afterOctober = Date.parse("2026-10-25T02:00:00Z");
+  assert.equal(lastDueBefore(afterOctober, schedule), Date.parse("2026-10-19T16:00:00Z"));
+  assert.equal(localOf(lastDueBefore(afterOctober, schedule)), "19.10.2026 19:00");
+  assert.equal(nextDueAfter(afterOctober, schedule), Date.parse("2026-10-26T17:00:00Z"));
+  assert.equal(localOf(nextDueAfter(afterOctober, schedule)), "26.10.2026 19:00");
+
+  // And right after the March switch to summer time.
+  const afterMarch = Date.parse("2026-03-29T02:00:00Z");
+  assert.equal(lastDueBefore(afterMarch, schedule), Date.parse("2026-03-23T17:00:00Z"));
+  assert.equal(localOf(lastDueBefore(afterMarch, schedule)), "23.03.2026 19:00");
+  assert.equal(nextDueAfter(afterMarch, schedule), Date.parse("2026-03-30T16:00:00Z"));
+  assert.equal(localOf(nextDueAfter(afterMarch, schedule)), "30.03.2026 19:00");
+
+  // The UTC instant moves by an hour while the local hour never does.
+  assert.notEqual(
+    nextDueAfter(afterOctober, schedule) - lastDueBefore(afterOctober, schedule),
+    WEEK_MS,
+    "seven days of elapsed time would land on the wrong local hour",
+  );
+
+  // Every Monday of a year lands on 19:00 local, whatever the season.
+  for (let week = 0; week < 52; week++) {
+    const probe = Date.parse("2026-01-07T12:00:00Z") + week * WEEK_MS;
+    const due = lastDueBefore(probe, schedule);
+    assert.match(localOf(due), /\d{2}\.\d{2}\.\d{4} 19:00$/, new Date(probe).toISOString());
+    assert.equal(new Date(due + offsetAt(schedule, due) * 60000).getUTCDay(), MONDAY);
+  }
+});
+
+test("reminder: an explicit offset follows no seasonal rule", () => {
+  const fixed = { weekday: MONDAY, hour: 19, minute: 0, offsetMinutes: 180 };
+  assert.equal(offsetAt(fixed, Date.parse("2026-01-15T12:00:00Z")), 180);
+  assert.equal(offsetAt(fixed, Date.parse("2026-07-15T12:00:00Z")), 180);
+  // Same instant, different answers: the zone moves, the fixed offset does not.
+  const zoned = { weekday: MONDAY, hour: 19, minute: 0, zone: "Europe/Kyiv" };
+  const january = Date.parse("2026-01-15T12:00:00Z");
+  assert.equal(offsetAt(zoned, january), 120);
+  assert.equal(offsetAt(fixed, january), 180);
+  assert.equal(nextDueAfter(january, fixed) - lastDueBefore(january, fixed), WEEK_MS);
 });
 
 test("reminder: time and offset parsing accepts real input and rejects nonsense", () => {
@@ -745,12 +837,13 @@ test("router: /results and /last read the stored history", () => {
 test("router: reminder settings can be read, disabled, re-enabled, and retimed", () => {
   const h = harness();
   assert.match(lastText(h.say("/remind")), /Нагадування<\/b>: увімкнені/);
-  assert.match(lastText(h.say("/remind")), /Наступне: 23\.09\.2026 10:00/);
+  assert.match(lastText(h.say("/remind")), /День: понеділок, час 19:00/);
+  assert.match(lastText(h.say("/remind")), /Наступне: 21\.09\.2026 19:00/);
   assert.match(lastText(h.say("/remind off")), /вимкнені/);
   assert.equal(h.store.user(777).remindersEnabled, false);
   assert.match(lastText(h.say("/remind on")), /увімкнені/);
   assert.equal(h.store.user(777).remindersEnabled, true);
-  assert.match(lastText(h.say("/remind 09:30")), /середа, час 09:30/);
+  assert.match(lastText(h.say("/remind 09:30")), /понеділок, час 09:30/);
   assert.equal(h.store.user(777).reminderTime, "09:30");
   h.say("/remind 9:05");
   assert.equal(h.store.user(777).reminderTime, "09:05", "the stored time is normalized");
@@ -773,6 +866,24 @@ test("router: /tz changes the offset used for display and scheduling", () => {
   completeViaKeyboard(h, GAD7, [0, 0, 0, 0, 0, 0, 0]);
   // 12:00 UTC is 04:00 in UTC-8.
   assert.match(lastText(h.say("/last")), /16\.09\.2026 04:00/);
+});
+
+test("router: /tz auto returns to the automatic zone", () => {
+  const h = harness({ config: { reminder: { time: "19:00", weekday: 1, zone: "Europe/Kyiv", offsetMinutes: null, graceMs: 12 * 60 * 60 * 1000 } } });
+  assert.match(lastText(h.say("/remind")), /Europe\/Kyiv/);
+  assert.match(lastText(h.say("/remind")), /перехід на літній час враховується/);
+
+  h.say("/tz +5");
+  assert.equal(h.store.user(777).tzOffsetMinutes, 300);
+  assert.match(lastText(h.say("/remind")), /UTC\+05:00, фіксований зсув/);
+
+  assert.match(lastText(h.say("/tz auto")), /автоматичний часовий пояс/);
+  assert.equal(h.store.user(777).tzOffsetMinutes, null);
+  assert.match(lastText(h.say("/remind")), /Europe\/Kyiv/);
+
+  // With the server pinned to a fixed offset there is nothing to return to.
+  const pinned = harness();
+  assert.match(lastText(pinned.say("/tz auto")), /недоступний/);
 });
 
 test("router: /export returns the caller's own data as JSON", () => {
@@ -838,10 +949,11 @@ test("router: display names cannot inject HTML into a message", () => {
 
 test("router: the weekly reminder quotes the last score of each instrument", () => {
   const h = harness();
-  assert.match(weeklyReminder(h.store, 777), /ще не проходили/);
+  const schedule = resolveSchedule(null, h.config.reminder);
+  assert.match(weeklyReminder(h.store, 777, schedule), /ще не проходили/);
   completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
-  const text = weeklyReminder(h.store, 777);
-  assert.match(text, /Середа/);
+  const text = weeklyReminder(h.store, 777, schedule);
+  assert.match(text, /Понеділок/);
   assert.match(text, /GAD-7: минулий бал 7\/21/);
   assert.match(text, /PHQ-9: ще не проходили/);
   const actions = h.router.reminderActions(777, text);
@@ -989,6 +1101,25 @@ test("webapp: a rejected payload answers with a recovery hint and stores nothing
   assert.match(outcome.reason, /not JSON/);
 });
 
+test("webapp: the app can hand the user back to the automatic zone", () => {
+  const h = harness({ config: { webappUrl: "https://example.pages.dev/", reminder: { time: "19:00", weekday: 1, zone: "Europe/Kyiv", offsetMinutes: null, graceMs: 12 * 60 * 60 * 1000 } } });
+  h.say("/tz +5");
+  assert.equal(h.store.user(777).tzOffsetMinutes, 300);
+  const actions = h.router.handleUpdate({
+    update_id: 12,
+    message: {
+      message_id: 1,
+      chat: h.chat,
+      web_app_data: { data: JSON.stringify({ v: 1, type: "reminders", enabled: true, time: "19:00", tz: "auto" }) },
+    },
+  });
+  assert.equal(h.store.user(777).tzOffsetMinutes, null);
+  assert.match(lastText(actions), /Europe\/Kyiv/);
+  // Anything else in that field is still refused.
+  assert.match(parseWebAppPayload(JSON.stringify({ v: 1, type: "reminders", tz: "kyiv" })).reason,
+    /within 14 hours of UTC, or the string auto/);
+});
+
 test("webapp: reminder settings from the app are applied and echoed", () => {
   const h = harness({ config: { webappUrl: "https://example.pages.dev/" } });
   const actions = h.router.handleUpdate({
@@ -999,8 +1130,8 @@ test("webapp: reminder settings from the app are applied and echoed", () => {
       web_app_data: { data: JSON.stringify({ v: 1, type: "reminders", enabled: true, time: "08:15", tz: 120 }) },
     },
   });
-  assert.match(lastText(actions), /середа, час 08:15/);
-  assert.match(lastText(actions), /UTC\+02:00/);
+  assert.match(lastText(actions), /понеділок, час 08:15/);
+  assert.match(lastText(actions), /UTC\+02:00, фіксований зсув/);
   const user = h.store.user(777);
   assert.equal(user.remindersEnabled, true);
   assert.equal(user.reminderTime, "08:15");
@@ -1260,9 +1391,30 @@ test("config: a valid environment produces resolved reminder defaults", () => {
   assert.equal(config.memoryOnly, true);
   assert.equal(config.reminder.time, "09:30");
   assert.equal(config.reminder.offsetMinutes, -330);
+  assert.equal(config.reminder.zone, null);
   assert.equal(config.reminder.graceMs, 6 * 60 * 60 * 1000);
   assert.match(config.crisisContact, /7333/);
   assert.match(config.crisisContact, /howareu\.com/);
+});
+
+test("config: the reminder defaults to Monday 19:00 in the Kyiv zone", () => {
+  const config = loadConfig({ BOT_TOKEN: FAKE_TOKEN }, { envFile: false });
+  assert.equal(config.reminder.time, "19:00");
+  assert.equal(config.reminder.weekday, 1);
+  assert.equal(config.reminder.zone, "Europe/Kyiv");
+  assert.equal(config.reminder.offsetMinutes, null, "the zone carries the offset, not a constant");
+
+  // An explicit offset replaces the zone entirely.
+  const pinned = loadConfig({ BOT_TOKEN: FAKE_TOKEN, REMINDER_UTC_OFFSET: "+2" }, { envFile: false });
+  assert.equal(pinned.reminder.zone, null);
+  assert.equal(pinned.reminder.offsetMinutes, 120);
+
+  const sunday = loadConfig({ BOT_TOKEN: FAKE_TOKEN, REMINDER_WEEKDAY: "0" }, { envFile: false });
+  assert.equal(sunday.reminder.weekday, 0);
+  assert.throws(() => loadConfig({ BOT_TOKEN: FAKE_TOKEN, REMINDER_WEEKDAY: "7" }, { envFile: false }),
+    /REMINDER_WEEKDAY must be 0/);
+  assert.throws(() => loadConfig({ BOT_TOKEN: FAKE_TOKEN, REMINDER_ZONE: "Mars/Olympus" }, { envFile: false }),
+    /unknown to this runtime/);
 });
 
 test("config: bad input fails closed with an explanation", () => {
@@ -1270,6 +1422,9 @@ test("config: bad input fails closed with an explanation", () => {
   assert.throws(() => loadConfig({ BOT_TOKEN: "nope" }, { envFile: false }), /does not look like a Telegram token/);
   assert.throws(() => loadConfig({ BOT_TOKEN: FAKE_TOKEN, REMINDER_TIME: "25:00" }, { envFile: false }),
     /REMINDER_TIME/);
+  // An empty offset is not an error: it means "use the zone".
+  assert.equal(loadConfig({ BOT_TOKEN: FAKE_TOKEN, REMINDER_UTC_OFFSET: "" }, { envFile: false })
+    .reminder.zone, "Europe/Kyiv");
   assert.throws(() => loadConfig({ BOT_TOKEN: FAKE_TOKEN, REMINDER_UTC_OFFSET: "nope" }, { envFile: false }),
     /REMINDER_UTC_OFFSET/);
   assert.throws(() => loadConfig({ BOT_TOKEN: FAKE_TOKEN, TICK_SECONDS: "0" }, { envFile: false }),
@@ -1318,23 +1473,26 @@ test("runtime: a poll dispatches the update, answers it, and advances the offset
   assert.equal(h.client.calls[0].payload.chat_id, 8);
 });
 
-test("runtime: the Wednesday sweep reminds once per weekly slot", async () => {
+test("runtime: the Monday sweep reminds once per weekly slot", async () => {
   const h = runtimeHarness();
   h.store.updateUser(8, { remindersEnabled: true });
-  const reminded = await h.runtime.sweepReminders(WED_NOON_UTC);
+  const reminded = await h.runtime.sweepReminders(JUST_AFTER_SLOT);
   assert.deepEqual(reminded, [8]);
-  assert.equal(h.store.user(8).lastRemindedAt, Date.parse("2026-09-16T07:00:00Z"));
-  assert.match(h.client.calls[0].payload.text, /Середа/);
+  assert.equal(h.store.user(8).lastRemindedAt, MONDAY_SLOT_UTC);
+  assert.match(h.client.calls[0].payload.text, /Понеділок/);
   // The same slot must not fire again, the next week must.
-  assert.deepEqual(await h.runtime.sweepReminders(WED_NOON_UTC + 60000), []);
-  assert.deepEqual(await h.runtime.sweepReminders(WED_NOON_UTC + WEEK_MS), [8]);
-  assert.equal(h.store.user(8).lastRemindedAt, Date.parse("2026-09-23T07:00:00Z"));
+  assert.deepEqual(await h.runtime.sweepReminders(JUST_AFTER_SLOT + 60000), []);
+  assert.deepEqual(await h.runtime.sweepReminders(JUST_AFTER_SLOT + WEEK_MS), [8]);
+  assert.equal(h.store.user(8).lastRemindedAt, MONDAY_SLOT_UTC + WEEK_MS);
+  // Two days later the slot is outside the grace window and is not sent late.
+  h.store.updateUser(9, { remindersEnabled: true });
+  assert.deepEqual(await h.runtime.sweepReminders(WED_NOON_UTC), []);
 });
 
 test("runtime: a user who disabled reminders is never swept", async () => {
   const h = runtimeHarness();
   h.store.updateUser(8, { remindersEnabled: false });
-  assert.deepEqual(await h.runtime.sweepReminders(WED_NOON_UTC), []);
+  assert.deepEqual(await h.runtime.sweepReminders(JUST_AFTER_SLOT), []);
   assert.equal(h.client.calls.length, 0);
 });
 
@@ -1342,19 +1500,19 @@ test("runtime: a 403 from a reminder disables that chat instead of looping", asy
   const h = runtimeHarness();
   h.store.updateUser(8, { remindersEnabled: true });
   h.client.failWith = new TelegramError("blocked", { status: 403, fatal: true });
-  assert.deepEqual(await h.runtime.sweepReminders(WED_NOON_UTC), []);
+  assert.deepEqual(await h.runtime.sweepReminders(JUST_AFTER_SLOT), []);
   assert.equal(h.store.user(8).remindersEnabled, false);
-  assert.equal(h.store.user(8).lastRemindedAt, Date.parse("2026-09-16T07:00:00Z"));
+  assert.equal(h.store.user(8).lastRemindedAt, MONDAY_SLOT_UTC);
 });
 
 test("runtime: a transient reminder failure leaves the slot pending", async () => {
   const h = runtimeHarness();
   h.store.updateUser(8, { remindersEnabled: true });
   h.client.failWith = new TelegramError("boom", { status: 500 });
-  assert.deepEqual(await h.runtime.sweepReminders(WED_NOON_UTC), []);
+  assert.deepEqual(await h.runtime.sweepReminders(JUST_AFTER_SLOT), []);
   assert.equal(h.store.user(8).lastRemindedAt, 0);
   h.client.failWith = null;
-  assert.deepEqual(await h.runtime.sweepReminders(WED_NOON_UTC), [8]);
+  assert.deepEqual(await h.runtime.sweepReminders(JUST_AFTER_SLOT), [8]);
 });
 
 test("runtime: a router failure on one update does not stop the poll loop", async () => {

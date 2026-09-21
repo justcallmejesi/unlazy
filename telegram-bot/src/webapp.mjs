@@ -72,9 +72,13 @@ function parseReminders(parsed) {
     if (typeof parsed.time !== "string" || !parseTimeOfDay(parsed.time)) return fail("time must be ГГ:ХХ");
     settings.reminderTime = parsed.time;
   }
-  if (parsed.tz !== undefined && parsed.tz !== null) {
+  if (parsed.tz === "auto") {
+    // Clears the user's fixed offset so the configured zone applies again,
+    // transitions included. Mirrors /tz auto in the chat.
+    settings.tzOffsetMinutes = null;
+  } else if (parsed.tz !== undefined && parsed.tz !== null) {
     if (!Number.isInteger(parsed.tz) || Math.abs(parsed.tz) > MAX_TZ_OFFSET_MINUTES) {
-      return fail("tz must be whole minutes within 14 hours of UTC");
+      return fail("tz must be whole minutes within 14 hours of UTC, or the string auto");
     }
     settings.tzOffsetMinutes = parsed.tz;
   }

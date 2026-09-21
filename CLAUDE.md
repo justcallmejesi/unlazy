@@ -23,10 +23,12 @@ See `telegram-bot/README.md`. Locale-bearing values:
 | Questionnaire items, options, severity bands | `telegram-bot/src/instruments.mjs` |
 | All user-facing copy | `telegram-bot/src/texts.mjs`, plus inline strings in `telegram-bot/src/router.mjs` |
 | Crisis contacts | `DEFAULT_CRISIS_CONTACT` in `telegram-bot/src/config.mjs`, overridable with `CRISIS_CONTACT` |
-| Default reminder time zone | `REMINDER_UTC_OFFSET` in `telegram-bot/src/config.mjs`, per-user override with `/tz` |
+| Default reminder zone and slot | `REMINDER_ZONE`, `REMINDER_WEEKDAY`, `REMINDER_TIME` in `telegram-bot/src/config.mjs`, per-user override with `/tz` |
 
-Scheduling uses fixed UTC offsets, so the Kyiv default needs changing at the
-March and October transitions until it is made time-zone aware.
+Scheduling resolves the zone offset per instant from the platform time-zone
+database, so the March and October transitions need no intervention. The
+default slot is Monday 19:00 Europe/Kyiv. A user who runs `/tz <offset>` pins a
+fixed offset and opts out of seasonal changes until `/tz auto`.
 
 ## Repository conventions
 
