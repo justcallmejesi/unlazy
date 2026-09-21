@@ -11,6 +11,8 @@ const TOKEN_SHAPE = /^\d{6,}:[A-Za-z0-9_-]{30,}$/;
 // Ukrainian services. Verified against the operators' own pages; see the
 // sources listed in telegram-bot/README.md. Override with CRISIS_CONTACT for
 // another country.
+export const DEFAULT_CONTACT_USERNAME = "justajsi";
+
 export const DEFAULT_CRISIS_CONTACT = [
   "Куди можна звернутися:",
   "• Екстрена допомога: 103 або 112",
@@ -103,7 +105,11 @@ export function loadConfig(env = process.env, options = {}) {
     throw new Error("WEBAPP_URL must be an https URL, for example https://example.pages.dev/");
   }
 
-  const contactUsername = String(env.CONTACT_USERNAME || "").trim().replace(/^@/, "");
+  // The owner's account, so the offer works without extra configuration.
+  // CONTACT_USERNAME overrides it; an empty value switches the offer off.
+  const contactUsername = String(
+    env.CONTACT_USERNAME === undefined ? DEFAULT_CONTACT_USERNAME : env.CONTACT_USERNAME,
+  ).trim().replace(/^@/, "");
   if (contactUsername && !/^[A-Za-z0-9_]{4,32}$/.test(contactUsername)) {
     throw new Error("CONTACT_USERNAME must be a Telegram username: 4 to 32 letters, digits or underscores");
   }
@@ -127,7 +133,7 @@ export function loadConfig(env = process.env, options = {}) {
     // Where to point someone whose score is above the cutoff. Empty username
     // switches the whole offer off.
     contact: {
-      username: String(env.CONTACT_USERNAME || "").trim().replace(/^@/, ""),
+      username: contactUsername,
       name: String(env.CONTACT_NAME || "").trim(),
       role: String(env.CONTACT_ROLE || "").trim(),
     },

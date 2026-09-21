@@ -1403,6 +1403,21 @@ test("contact: /contact works any time and stays free after the trial", () => {
   assert.match(offer, /GAD-7 \(скринінг тривоги\): 14 з 21/);
 });
 
+test("contact: with only a username the button names the account", () => {
+  const h = harness({ config: { contact: { username: "justajsi", name: "", role: "" } } });
+  h.say("/start");
+  const finished = completeViaKeyboard(h, GAD7, [2, 2, 2, 2, 2, 2, 2]);
+  const offer = finished.find((action) => {
+    const rows = action.payload && action.payload.reply_markup && action.payload.reply_markup.inline_keyboard;
+    return Array.isArray(rows) && rows.length && rows[0].length &&
+      String(rows[0][0].url || "").indexOf("t.me/justajsi") !== -1;
+  });
+  assert.ok(offer);
+  assert.equal(offer.payload.reply_markup.inline_keyboard[0][0].text, "Написати @justajsi");
+  assert.match(offer.payload.text, /@justajsi/);
+  assert.doesNotMatch(offer.payload.text, /\(\)/, "no empty parentheses where the role would go");
+});
+
 test("contact: with no username configured nothing is offered", () => {
   const h = harness();
   h.say("/start");
@@ -1411,10 +1426,13 @@ test("contact: with no username configured nothing is offered", () => {
   assert.match(lastText(h.say("/contact")), /не налаштований/);
 });
 
-test("contact: the username is validated", () => {
+test("contact: the username defaults to the owner's account and is validated", () => {
   const good = loadConfig({ BOT_TOKEN: FAKE_TOKEN, CONTACT_USERNAME: "@helper_psy" }, { envFile: false });
   assert.equal(good.contact.username, "helper_psy", "a leading at sign is stripped");
-  assert.equal(loadConfig({ BOT_TOKEN: FAKE_TOKEN }, { envFile: false }).contact.username, "");
+  // Unset means the owner's account, so the offer works out of the box.
+  assert.equal(loadConfig({ BOT_TOKEN: FAKE_TOKEN }, { envFile: false }).contact.username, "justajsi");
+  // An explicitly empty value is the off switch, and must not fall back.
+  assert.equal(loadConfig({ BOT_TOKEN: FAKE_TOKEN, CONTACT_USERNAME: "" }, { envFile: false }).contact.username, "");
   assert.throws(() => loadConfig({ BOT_TOKEN: FAKE_TOKEN, CONTACT_USERNAME: "ab" }, { envFile: false }),
     /must be a Telegram username/);
   assert.throws(() => loadConfig({ BOT_TOKEN: FAKE_TOKEN, CONTACT_USERNAME: "bad name!" }, { envFile: false }),

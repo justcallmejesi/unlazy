@@ -101,8 +101,9 @@ WEBAPP_URL=
 PRICE_STARS=100
 TRIAL_DAYS=14
 
-# Your Telegram username for the help offer shown above the cutoff, no at sign.
-CONTACT_USERNAME=
+# Account for the help offer shown above the cutoff, no at sign. Defaults to
+# justajsi in the code; set it empty here to switch the offer off.
+CONTACT_USERNAME=justajsi
 CONTACT_NAME=
 CONTACT_ROLE=
 
