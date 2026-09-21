@@ -43,9 +43,9 @@ export const COMMANDS = [
   { command: "phq9", description: "Пройти PHQ-9 (настрій, 9 питань)" },
   { command: "isi", description: "Пройти ISI (сон, 7 питань)" },
   { command: "stress", description: "Пройти PSS-10 (стрес, 10 питань)" },
-  { command: "results", description: "Історія результатів" },
-  { command: "last", description: "Останні результати" },
-  { command: "remind", description: "Нагадування: on, off або ГГ:ХХ" },
+  { command: "results", description: "Історія результатів (повний доступ)" },
+  { command: "last", description: "Останні результати (повний доступ)" },
+  { command: "remind", description: "Нагадування (повний доступ)" },
   { command: "tz", description: "Часовий пояс: auto або, наприклад, /tz +3" },
   { command: "export", description: "Вивантажити мої дані у JSON" },
   { command: "delete", description: "Видалити всі мої дані" },
@@ -65,9 +65,10 @@ export function crisisBlock(crisisContact) {
   ].join("\n");
 }
 
-export function greeting(name, schedule, extra = "") {
+export function greeting(name, schedule, options = {}) {
   const hello = name ? "Привіт, " + escapeHtml(name) + "!" : "Привіт!";
   const words = weekdayWords(schedule);
+  const extra = options.extra || "";
   return [
     hello,
     "",
@@ -77,8 +78,10 @@ export function greeting(name, schedule, extra = "") {
     "• <b>ISI</b>: 7 питань про сон",
     "• <b>PSS-10</b>: 10 питань про стрес за останній місяць",
     "",
-    "Результати зберігаються, щоб Ви бачили динаміку. " +
-      escapeHtml(words.every.charAt(0).toUpperCase() + words.every.slice(1)) + " я нагадаю пройти тести знову.",
+    options.remindersActive
+      ? "Результати зберігаються, щоб Ви бачили динаміку. " +
+        escapeHtml(words.every.charAt(0).toUpperCase() + words.every.slice(1)) + " я нагадаю пройти тести знову."
+      : "Результати зберігаються. Історія, статистика і щотижневе нагадування входять у повний доступ.",
     "",
     DISCLAIMER,
     extra ? "" : null,
@@ -155,13 +158,15 @@ export function paywall(price, entitlementState) {
   PAID_INSTRUMENT_LIST.forEach((instrument) => {
     lines.push("• " + escapeHtml(instrument.title) + ": " + escapeHtml(instrument.subtitle));
   });
-  lines.push("• повна історія і статистика за всіма шкалами");
+  lines.push("• історія всіх проходжень і статистика з графіками");
+  lines.push("• щотижневе нагадування і його налаштування");
   lines.push("");
   lines.push("<b>Що назавжди безкоштовно</b>");
   FREE_INSTRUMENT_LIST.forEach((instrument) => {
-    lines.push("• " + escapeHtml(instrument.title) + ": " + escapeHtml(instrument.subtitle));
+    lines.push("• " + escapeHtml(instrument.title) + ": " + escapeHtml(instrument.subtitle) + ", сам тест і результат");
   });
-  lines.push("• щотижневе нагадування, блок підтримки, /export і /delete");
+  lines.push("• блок підтримки, якщо в PHQ-9 позначено ризик");
+  lines.push("• /export і /delete: Ваші дані завжди Ваші");
   lines.push("");
   lines.push("Ціна: <b>" + escapeHtml(priceLine(price)) + "</b>. Оплата зірками Telegram.");
   return lines.join("\n");
@@ -189,6 +194,10 @@ export function purchaseThanks(price) {
 
 export function alreadyPro() {
   return "Повний доступ уже відкритий. Дякую, що підтримали бота.";
+}
+
+export function lockedFeature(name) {
+  return name;
 }
 
 export function paySupport(price) {

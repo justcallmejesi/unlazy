@@ -13,9 +13,12 @@
 export const PAYLOAD_PREFIX = "pro-v1";
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
-// What a purchase unlocks. The screening core, the weekly reminder, the crisis
-// block, /export and /delete are deliberately not in this list.
-export const PAID_FEATURES = ["instruments", "history", "statistics"];
+// Free forever: taking GAD-7 and PHQ-9, the result with its crisis block and
+// the weekly note. Plus /export and /delete, which are access to one's own
+// health data rather than a feature to sell.
+export const FREE_FEATURES = ["screening", "note", "export", "delete"];
+// Everything else is the one-time purchase.
+export const PAID_FEATURES = ["scales", "history", "statistics", "reminders", "settings"];
 
 export function trialEndsAt(user) {
   return Number.isFinite(user && user.trialEndsAt) ? Number(user.trialEndsAt) : null;

@@ -11,6 +11,7 @@
 
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "./src/config.mjs";
+import { entitlement } from "./src/billing.mjs";
 import { TelegramClient, TelegramError } from "./src/telegram.mjs";
 import { Store } from "./src/store.mjs";
 import { SessionManager } from "./src/session.mjs";
@@ -93,7 +94,9 @@ export class BotRuntime {
   // One reminder sweep. Returns the chat ids that were reminded.
   async sweepReminders(nowMs = Date.now()) {
     const due = dueReminders({
-      users: this.store.allUsers(),
+      // The weekly reminder is part of the paid access, so a lapsed chat is
+      // filtered out before any slot is computed for it.
+      users: this.store.allUsers().filter((user) => entitlement(user, nowMs).active),
       nowMs,
       defaults: this.config.reminder,
       graceMs: this.config.reminder.graceMs,

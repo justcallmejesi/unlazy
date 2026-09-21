@@ -19,8 +19,6 @@ import {
 import { parseWebAppPayload } from "./webapp.mjs";
 
 const HTML = { parse_mode: "HTML" };
-// How much history a chat sees without the full access.
-const FREE_HISTORY_LIMIT = 8;
 // Commands that start a questionnaire, mapped to their instrument.
 const INSTRUMENT_COMMANDS = {};
 INSTRUMENT_LIST.forEach((instrument) => { INSTRUMENT_COMMANDS[instrument.command.slice(1)] = instrument; });
@@ -228,7 +226,7 @@ export function createRouter(context) {
         const state = access(chatId);
         const hello = send(chatId,
           greeting(message && message.from && message.from.first_name, scheduleFor(chatId),
-            trialNotice(state, config.price)),
+            { extra: trialNotice(state, config.price), remindersActive: state.active }),
           { reply_markup: config.webappUrl ? appKeyboard(appUrl(state)) : startKeyboard(state.active) });
         // Without the app the chat flow is the whole product, so the inline
         // start buttons stay the entry point.
@@ -261,18 +259,28 @@ export function createRouter(context) {
       }
       case "results": {
         const state = access(chatId);
-        const limit = state.active ? Infinity : FREE_HISTORY_LIMIT;
-        const body = historyMessage(store, chatId, scheduleFor(chatId), limit);
-        const tail = state.active ? "" : "\n\nПовна історія входить у повний доступ: /buy";
-        return [send(chatId, body + tail, { reply_markup: startKeyboard(state.active) })];
+        if (!state.active) return locked(chatId, state);
+        return [send(chatId, historyMessage(store, chatId, scheduleFor(chatId)),
+          { reply_markup: startKeyboard(true) })];
       }
-      case "last":
+      case "last": {
+        const state = access(chatId);
+        if (!state.active) return locked(chatId, state);
         return [send(chatId, lastMessage(store, chatId, scheduleFor(chatId)),
-          { reply_markup: startKeyboard(access(chatId).active) })];
-      case "remind":
+          { reply_markup: startKeyboard(true) })];
+      }
+      case "remind": {
+        const state = access(chatId);
+        // The weekly reminder itself is part of the full access, so its
+        // settings are too.
+        if (!state.active) return locked(chatId, state);
         return handleRemind(chatId, args);
-      case "tz":
+      }
+      case "tz": {
+        const state = access(chatId);
+        if (!state.active) return locked(chatId, state);
         return handleTimezone(chatId, args);
+      }
       case "export": {
         const user = store.user(chatId);
         return [send(chatId, exportMessage({
@@ -444,9 +452,13 @@ export function createRouter(context) {
       return [ack(query.id)].concat(startInstrument(chatId, instrument));
     }
     if (parts[0] === "h") {
+      const state = access(chatId);
+      if (!state.active) return [ack(query.id)].concat(locked(chatId, state));
       return [ack(query.id), send(chatId, historyMessage(store, chatId, scheduleFor(chatId)))];
     }
     if (parts[0] === "r") {
+      const state = access(chatId);
+      if (!state.active) return [ack(query.id)].concat(locked(chatId, state));
       if (parts[1] === "off") return [ack(query.id)].concat(handleRemind(chatId, "off"));
       if (parts[1] === "on") return [ack(query.id)].concat(handleRemind(chatId, "on"));
       return [ack(query.id), send(chatId, reminderLine(chatId))];

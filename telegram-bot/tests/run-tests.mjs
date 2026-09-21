@@ -86,6 +86,12 @@ function harness(overrides = {}) {
   return { config, store, sessions, router, clock, chat, say, tap };
 }
 
+// Most features are behind the one-time purchase now, so tests that exercise
+// them either start the trial with /start or buy outright.
+function grantAccess(store, chatId, nowMs) {
+  applyPayment(store, chatId, { currency: "XTR", total_amount: 100, telegram_payment_charge_id: "ch_test" }, nowMs);
+}
+
 const textsOf = (actions) => actions
   .filter((action) => action.payload && typeof action.payload.text === "string")
   .map((action) => action.payload.text);
@@ -962,6 +968,9 @@ test("router: starting the other instrument replaces the run in progress", () =>
 
 test("router: /results and /last read the stored history", () => {
   const h = harness();
+  // History is part of the full access, so a fresh chat sees the offer first.
+  assert.match(lastText(h.say("/results")), /Повний доступ/);
+  h.say("/start");
   assert.match(lastText(h.say("/results")), /ще немає проходжень/);
   assert.match(lastText(h.say("/last")), /немає даних/);
   completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
@@ -973,6 +982,7 @@ test("router: /results and /last read the stored history", () => {
 
 test("router: reminder settings can be read, disabled, re-enabled, and retimed", () => {
   const h = harness();
+  h.say("/start");
   assert.match(lastText(h.say("/remind")), /Нагадування<\/b>: увімкнені/);
   assert.match(lastText(h.say("/remind")), /День: понеділок, час 19:00/);
   assert.match(lastText(h.say("/remind")), /Наступне: 21\.09\.2026 19:00/);
@@ -994,6 +1004,7 @@ test("router: reminder settings can be read, disabled, re-enabled, and retimed",
 
 test("router: /tz changes the offset used for display and scheduling", () => {
   const h = harness();
+  h.say("/start");
   assert.match(lastText(h.say("/tz")), /UTC\+03:00/);
   assert.match(lastText(h.say("/tz -08:00")), /UTC-08:00/);
   assert.equal(h.store.user(777).tzOffsetMinutes, -480);
@@ -1007,6 +1018,7 @@ test("router: /tz changes the offset used for display and scheduling", () => {
 
 test("router: /tz auto returns to the automatic zone", () => {
   const h = harness({ config: { reminder: { time: "19:00", weekday: 1, zone: "Europe/Kyiv", offsetMinutes: null, graceMs: 12 * 60 * 60 * 1000 } } });
+  h.say("/start");
   assert.match(lastText(h.say("/remind")), /Europe\/Kyiv/);
   assert.match(lastText(h.say("/remind")), /перехід на літній час враховується/);
 
@@ -1020,6 +1032,7 @@ test("router: /tz auto returns to the automatic zone", () => {
 
   // With the server pinned to a fixed offset there is nothing to return to.
   const pinned = harness();
+  pinned.say("/start");
   assert.match(lastText(pinned.say("/tz auto")), /недоступний/);
 });
 
@@ -1201,21 +1214,53 @@ test("paywall: a successful payment unlocks everything for good", () => {
   assert.match(lastText(h.say("/buy")), /уже відкритий/);
 });
 
-test("paywall: free history is capped, full history comes with the purchase", () => {
+test("paywall: history, settings and reminders are locked, the tests are not", () => {
   const h = harness();
   h.say("/start");
   for (let run = 0; run < 12; run++) {
     h.store.addResult(777, buildResult(GAD7, [1, 1, 1, 1, 1, 1, 1], WED_NOON_UTC - run * WEEK_MS));
   }
   h.clock.now += 20 * DAY;
-  const limited = lastText(h.say("/results"));
-  assert.match(limited, /показані останні 8 з 12/);
-  assert.match(limited, /Повна історія входить у повний доступ/);
 
-  applyPayment(h.store, 777, { currency: "XTR", total_amount: 100, telegram_payment_charge_id: "ch_2" }, h.clock.now);
+  ["/results", "/last", "/remind", "/tz +3"].forEach((command) => {
+    assert.match(lastText(h.say(command)), /Повний доступ/, command + " is behind the purchase");
+  });
+  assert.match(lastText(h.tap("h|all")), /Повний доступ/);
+  assert.match(lastText(h.tap("r|status")), /Повний доступ/);
+  // The two screening tests keep working, which is the whole free tier.
+  assert.match(lastText(h.say("/gad7")), /Відчуття нервозності/);
+  const finished = completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
+  assert.match(scoreText(finished), /Бали: <b>7<\/b> з 21/);
+  assert.equal(h.store.history(777, "gad7").length, 13, "a free result is still stored");
+  // And so do the data commands: access to one's own data is not a feature.
+  assert.match(lastText(h.say("/export")), /gad7/);
+
+  grantAccess(h.store, 777, h.clock.now);
   const full = lastText(h.say("/results"));
-  assert.doesNotMatch(full, /показані останні/);
-  assert.doesNotMatch(full, /повний доступ/);
+  assert.match(full, /показані останні 10 з 13/);
+  assert.match(lastText(h.say("/remind")), /Нагадування/);
+});
+
+test("paywall: a lapsed chat gets no weekly reminder", async () => {
+  const h = runtimeHarness();
+  ensureTrial(h.store, 8, MONDAY_SLOT_UTC - 20 * DAY, 14);
+  h.store.updateUser(8, { remindersEnabled: true });
+  // The trial ran out six days before this slot.
+  assert.deepEqual(await h.runtime.sweepReminders(JUST_AFTER_SLOT), []);
+  assert.equal(h.client.calls.length, 0);
+  assert.equal(h.store.user(8).lastRemindedAt, 0, "the slot is left untouched, not marked as sent");
+
+  grantAccess(h.store, 8, JUST_AFTER_SLOT);
+  assert.deepEqual(await h.runtime.sweepReminders(JUST_AFTER_SLOT), [8]);
+});
+
+test("paywall: /start promises the reminder only while access lasts", () => {
+  const h = harness();
+  assert.match(h.say("/start")[0].payload.text, /я нагадаю пройти тести знову/);
+  h.clock.now += 20 * DAY;
+  const lapsed = h.say("/start")[0].payload.text;
+  assert.match(lapsed, /входять у повний доступ/);
+  assert.doesNotMatch(lapsed, /я нагадаю пройти тести знову/);
 });
 
 test("paywall: /paysupport explains the refund and what stays free", () => {
@@ -1415,6 +1460,7 @@ test("webapp: a rejected payload answers with a recovery hint and stores nothing
 
 test("webapp: the app can hand the user back to the automatic zone", () => {
   const h = harness({ config: { webappUrl: "https://example.pages.dev/", reminder: { time: "19:00", weekday: 1, zone: "Europe/Kyiv", offsetMinutes: null, graceMs: 12 * 60 * 60 * 1000 } } });
+  h.say("/start");
   h.say("/tz +5");
   assert.equal(h.store.user(777).tzOffsetMinutes, 300);
   const actions = h.router.handleUpdate({
@@ -1789,6 +1835,7 @@ test("runtime: a poll dispatches the update, answers it, and advances the offset
 test("runtime: the Monday sweep reminds once per weekly slot", async () => {
   const h = runtimeHarness();
   h.store.updateUser(8, { remindersEnabled: true });
+  grantAccess(h.store, 8, JUST_AFTER_SLOT);
   const reminded = await h.runtime.sweepReminders(JUST_AFTER_SLOT);
   assert.deepEqual(reminded, [8]);
   assert.equal(h.store.user(8).lastRemindedAt, MONDAY_SLOT_UTC);
@@ -1799,6 +1846,7 @@ test("runtime: the Monday sweep reminds once per weekly slot", async () => {
   assert.equal(h.store.user(8).lastRemindedAt, MONDAY_SLOT_UTC + WEEK_MS);
   // Two days later the slot is outside the grace window and is not sent late.
   h.store.updateUser(9, { remindersEnabled: true });
+  grantAccess(h.store, 9, WED_NOON_UTC);
   assert.deepEqual(await h.runtime.sweepReminders(WED_NOON_UTC), []);
 });
 
@@ -1812,6 +1860,7 @@ test("runtime: a user who disabled reminders is never swept", async () => {
 test("runtime: a 403 from a reminder disables that chat instead of looping", async () => {
   const h = runtimeHarness();
   h.store.updateUser(8, { remindersEnabled: true });
+  grantAccess(h.store, 8, JUST_AFTER_SLOT);
   h.client.failWith = new TelegramError("blocked", { status: 403, fatal: true });
   assert.deepEqual(await h.runtime.sweepReminders(JUST_AFTER_SLOT), []);
   assert.equal(h.store.user(8).remindersEnabled, false);
@@ -1821,6 +1870,7 @@ test("runtime: a 403 from a reminder disables that chat instead of looping", asy
 test("runtime: a transient reminder failure leaves the slot pending", async () => {
   const h = runtimeHarness();
   h.store.updateUser(8, { remindersEnabled: true });
+  grantAccess(h.store, 8, JUST_AFTER_SLOT);
   h.client.failWith = new TelegramError("boom", { status: 500 });
   assert.deepEqual(await h.runtime.sweepReminders(JUST_AFTER_SLOT), []);
   assert.equal(h.store.user(8).lastRemindedAt, 0);

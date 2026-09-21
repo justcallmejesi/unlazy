@@ -26,9 +26,14 @@
      border declaration with it. */
   --line: rgba(0, 0, 0, .12);
   --grid: rgba(0, 0, 0, .09);
-  /* Validated categorical slot 1. One accent for all charts: every scale has
-     its own plot and title, so colour is not the identity carrier. */
-  --series: #2a78d6;
+  /* One hue per scale, as asked: anxiety red, depression dark blue, sleep light
+     blue, stress burgundy. Validated on white: band, chroma, contrast and both
+     separation floors pass. Colour is still never the only cue, every chart
+     carries its name and a swatch beside it. */
+  --series-gad7: #e14b30;
+  --series-phq9: #2f4fa8;
+  --series-isi: #2e9bd4;
+  --series-pss10: #8f1f3f;
   --radius: 14px;
 }
 @media (prefers-color-scheme: dark) {
@@ -40,7 +45,10 @@
     --ink: var(--tg-theme-text-color, #f5f5f5);
     --ink-2: var(--tg-theme-subtitle-text-color, #c3c2b7);
     --ink-3: var(--tg-theme-hint-color, #8d9aa8);
-    --series: #3987e5;
+    --series-gad7: #e8635a;
+    --series-phq9: #5878d2;
+    --series-isi: #35a0d4;
+    --series-pss10: #bf4d80;
     --line: rgba(255, 255, 255, .18);
     --grid: rgba(255, 255, 255, .13);
   }
@@ -53,7 +61,10 @@
   --ink: var(--tg-theme-text-color, #f5f5f5);
   --ink-2: var(--tg-theme-subtitle-text-color, #c3c2b7);
   --ink-3: var(--tg-theme-hint-color, #8d9aa8);
-  --series: #3987e5;
+  --series-gad7: #e8635a;
+  --series-phq9: #5878d2;
+  --series-isi: #35a0d4;
+  --series-pss10: #bf4d80;
   --line: rgba(255, 255, 255, .18);
   --grid: rgba(255, 255, 255, .13);
 }
@@ -86,7 +97,9 @@ p { margin: 0 0 10px; }
 .tile-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
 .tile { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
 .tile-label { font-size: 13px; color: var(--ink-3); display: flex; align-items: center; gap: 6px; }
+/* A colour always sits beside a name, never alone. */
 .swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+figcaption .swatch { margin-right: 2px; }
 .tile-value { font-size: 30px; font-weight: 650; letter-spacing: -.02em; margin-top: 2px; }
 .tile-sub { font-size: 13px; color: var(--ink-2); }
 
@@ -101,7 +114,7 @@ p { margin: 0 0 10px; }
 /* Inline SVG rather than symbol characters: the WebView font is whatever the
    device ships, and half the geometric glyphs fall back to a box. */
 .menu-item .glyph { width: 26px; height: 26px; flex: none; color: var(--ink-3); }
-.menu-item .glyph.scale { color: var(--series); }
+.menu-item .glyph.scale { color: var(--scale-color, var(--ink-3)); }
 .menu-item.locked .glyph { opacity: .55; }
 .menu-item .lock { font-size: 12px; color: var(--ink-3); }
 .menu-item .body { flex: 1; min-width: 0; }

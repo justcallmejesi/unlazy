@@ -39,9 +39,20 @@ fixed offset and opts out of seasonal changes until `/tz auto`.
 
 ## Paid model
 
-One-time purchase in Telegram Stars (`XTR`) after a 14-day trial. GAD-7, PHQ-9,
-the weekly reminder, the crisis block, `/export` and `/delete` are free
-forever and must stay that way: a questionnaire that asks about self-harm never
-ends in a payment prompt. ISI and PSS-10, deep history and statistics are the
-paid part. ISI and PSS-10 are copyrighted and commercial use needs the
-rightsholder's permission; see the licence note in `telegram-bot/README.md`.
+One-time purchase in Telegram Stars (`XTR`) after a 14-day trial.
+
+Free forever, and it must stay that way: taking GAD-7 and PHQ-9, the result
+with its crisis block, the weekly note, `/export` and `/delete`. A
+questionnaire that asks about self-harm never ends in a payment prompt, and
+access to one's own health data is not a feature to sell.
+
+Paid: ISI and PSS-10, history (`/results`, `/last`), statistics, the weekly
+reminder and its settings (`/remind`, `/tz`).
+
+ISI and PSS-10 are copyrighted and commercial use needs the rightsholder's
+permission; see the licence note in `telegram-bot/README.md`.
+
+Chart colours are per scale: anxiety red, depression dark blue, sleep light
+blue, stress burgundy. Light mode clears every check in the dataviz validator;
+dark mode has one pair below the separation floor, which is why every chart
+carries its name plus a swatch and no plot ever holds two scales.

@@ -12,10 +12,12 @@
 
 import { INSTRUMENTS, INSTRUMENT_LIST, buildResult, severityOf } from "./instruments.mjs";
 
-// One accent for every chart. Each scale gets its own plot with its own title
-// and its own axis, so colour is decoration here, not identity: four hues
-// would fail the colour-blind separation floors for no gain.
-const SERIES = "var(--series)";
+// One hue per scale. On a light surface the four clear every check; on the
+// dark surface the navy and the light blue sit closer than the separation
+// floor wants, which is why colour is never the only cue: each chart carries
+// its name and a swatch, each tile its label, and no plot ever holds two
+// scales at once.
+const seriesColor = (instrument) => "var(--series-" + instrument.id + ")";
 const MAX_NOTE_LENGTH = 1000;
 const RESULT_PREFIX = "r_";
 const SETTINGS_KEY = "s_settings";
@@ -233,6 +235,7 @@ function renderHome() {
     button.type = "button";
     button.setAttribute("data-instrument", instrument.id);
     button.innerHTML = SCALE_ICON;
+    button.style.setProperty("--scale-color", seriesColor(instrument));
     const body = document.createElement("span");
     body.className = "body";
     const title = document.createElement("span");
@@ -363,6 +366,10 @@ function renderChart(container, instrument, entries) {
   container.textContent = "";
   const figure = document.createElement("figure");
   const caption = document.createElement("figcaption");
+  const swatch = document.createElement("span");
+  swatch.className = "swatch";
+  swatch.style.background = seriesColor(instrument);
+  caption.appendChild(swatch);
   const name = document.createElement("span");
   name.className = "name";
   name.textContent = instrument.title;
@@ -389,7 +396,7 @@ function renderChart(container, instrument, entries) {
   const pad = { top: 12, right: 30, bottom: 22, left: 26 };
   const plotW = width - pad.left - pad.right;
   const plotH = height - pad.top - pad.bottom;
-  const color = SERIES;
+  const color = seriesColor(instrument);
 
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", "0 0 " + width + " " + height);
@@ -513,7 +520,10 @@ function renderTiles(container, results) {
     tile.className = "tile";
     const label = document.createElement("div");
     label.className = "tile-label";
-    // The title is the identity, not a colour chip.
+    const swatch = document.createElement("span");
+    swatch.className = "swatch";
+    swatch.style.background = seriesColor(instrument);
+    label.appendChild(swatch);
     label.appendChild(document.createTextNode(instrument.title));
     const value = document.createElement("div");
     value.className = "tile-value";
