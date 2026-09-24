@@ -9,14 +9,14 @@
 Якщо хостинг дає безкоштовний тест, це найважливіші чотири команди. Без доступу до Telegram бот там не запрацює, і краще дізнатися це до оплати року.
 
 ```text
-curl -sS -o /dev/null -w "%{http_code}\n" https://api.telegram.org   # чекаємо 404
+curl -sS -o /dev/null -w "%{http_code}\n" https://api.telegram.org   # чекаємо 302
 systemd-detect-virt                                                  # чекаємо kvm
 systemctl --version                                                  # systemd має бути
 node --version                                                       # будь-яка або відсутня
 curl -sS -o /dev/null -w "%{http_code}\n" https://github.com         # 200 означає, що IPv4 є
 ```
 
-`404` від Telegram це нормальна відповідь кореня API, вона доводить, що зв'язок є. Таймаут або помилка з'єднання означають, що цей хостинг не підходить. `openvz` замість `kvm` не вирок, але systemd там буває урізаний, тому дивіться уважно на запуск сервісу.
+`302` від Telegram це нормальна відповідь кореня API: переадресація на документацію, яка доводить, що зв'язок є. Таймаут або помилка з'єднання означають, що цей хостинг не підходить. Виняток `Could not resolve host` на сервері лише з IPv6: це зламаний DNS, він лікується, дивіться розділ про IPv6 нижче. `openvz` замість `kvm` не вирок, але systemd там буває урізаний, тому дивіться уважно на запуск сервісу.
 
 Остання команда перевіряє IPv4: у GitHub немає адрес IPv6 взагалі, тому помилка зʼєднання там означає, що сервер лише на IPv6. Це не перешкода, дивіться розділ нижче.
 
@@ -57,10 +57,32 @@ bash telegram-bot/deploy/install.sh
 | --- | --- |
 | `api.telegram.org` | є |
 | `archive.ubuntu.com`, `security.ubuntu.com` | є |
+| регіональні дзеркала, наприклад `de.archive.ubuntu.com` | **немає** |
 | `deb.nodesource.com` | є |
 | `github.com`, `codeload.github.com` | **немає** |
 
-Тобто ламається саме `git clone`, і тільки він. Скопіюйте код зі свого компʼютера, де IPv4 є:
+Шаблони таких серверів часто приходять з двома поломками, які треба прибрати до всього іншого.
+
+**DNS.** Якщо `curl` пише `Could not resolve host`, у шаблоні прописані DNS-сервери на IPv4, до яких сервер не дістає. Пропишіть сервери з адресами IPv6 (тут Quad9):
+
+```text
+echo DNS=2620:fe::fe 2620:fe::9 >> /etc/systemd/resolved.conf
+systemctl restart systemd-resolved
+curl -I https://api.telegram.org          # перший рядок HTTP/2 302
+```
+
+**Дзеркало apt.** Якщо `apt update` пише `Failed to fetch http://de.archive.ubuntu.com`, шаблон дивиться в регіональне дзеркало без IPv6. Перемкніть на головне:
+
+```text
+sed -i 's/de.archive/archive/' /etc/apt/sources.list /etc/apt/sources.list.d/*
+apt update
+```
+
+Повідомлення `can't read /etc/apt/sources.list` тут нешкідливе: у Ubuntu 24.04 джерела лежать в іншому файлі. Для іншої країни замініть `de` на її код.
+
+`ping` для перевірки не годиться: провайдери часто ріжуть ICMP, і `100% packet loss` при робочій мережі це нормально. Перевіряйте через `curl`.
+
+Після цього ламається саме `git clone`, і тільки він. Скопіюйте код зі свого компʼютера, де IPv4 є:
 
 ```text
 git clone https://github.com/justcallmejesi/unlazy.git
