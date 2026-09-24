@@ -1,0 +1,42 @@
+sea.jpg
+  Crop of "Sunset by the Pier" — https://unsplash.com/photos/ces8_Bo7bhQ
+  Obtained from: github.com/elementary/wallpapers (backgrounds/Sunset by the Pier.jpg)
+  Licence: Unsplash photo published before 2017-06-08 -> CC0 1.0 (public domain).
+  Per elementary/wallpapers debian/copyright (deb-packaging branch).
+  No attribution required; free for commercial use. Recoloured (tritone grade) for brand palette.
+
+night.jpg
+  Crop of "Snow-Capped Mountain" — https://www.pexels.com/photo/photo-of-snow-capped-mountain-during-evening-2440024/
+  Obtained from: github.com/elementary/wallpapers (backgrounds/Snow-Capped Mountain.jpg)
+  Licence: Pexels licence — free for commercial use, no attribution required.
+  Per elementary/wallpapers debian/copyright (deb-packaging branch).
+  Recoloured (split-tone grade) for brand palette.
+
+wave.jpg  (used for reel 2 — "ТЕ, ЩО ТЕБЕ НЕ ВБИЛО")
+  Crop of an aerial surf photograph by Nattu Adnan — https://unsplash.com/photos/Ai2TRdvI6gM
+  Obtained from: github.com/elementary/wallpapers (backgrounds/Nattu Adnan.jpg)
+  Licence: Unsplash licence — free to use and modify, commercial use allowed, no attribution required.
+  Per elementary/wallpapers debian/copyright (deb-packaging branch).
+  Recoloured (split-tone grade) for brand palette.
+
+fern.jpg  (alternate)
+  Crop of "Morskie Oko" — github.com/elementary/wallpapers (backgrounds/Morskie Oko.jpg)
+  Dark fern undergrowth. Same licence basis as above.
+
+meadow.jpg  (used for reel 2 — "ТЕ, ЩО ТЕБЕ НЕ ВБИЛО")
+  Crop of "A Large Body of Water Surrounded By Mountains" by Peter Thomas
+  https://unsplash.com/photos/Dxod5pdRtsk
+  Obtained from: github.com/elementary/wallpapers (backgrounds/)
+  Licence: Unsplash licence — commercial use allowed, no attribution required.
+  Recoloured (split-tone grade). The two gold threads are drawn in the renderer
+  (textures.js -> drawThread), not part of the photograph.
+
+sand.jpg  (series 2 — "ВІН НЕ ХОТІВ")
+  Crop of "A Trail of Footprints In The Sand" by David Emrich
+  https://unsplash.com/photos/A9mr3TPoj0k — Unsplash licence, commercial use, no attribution required.
+  Obtained from github.com/elementary/wallpapers (backgrounds/). Split-tone graded.
+
+frost.jpg  (series 3 — "ЗІ МНОЮ ВСЕ ДОБРЕ")
+  Crop of "Canazei Granite Ridges" — https://unsplash.com/photos/yrwpJwDNSHE
+  Unsplash photo published before 2017-06-08 -> CC0 1.0 (public domain).
+  Obtained from github.com/elementary/wallpapers (backgrounds/). Split-tone graded.

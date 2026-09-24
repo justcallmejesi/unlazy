@@ -1,0 +1,4 @@
+node_modules/
+frames/
+*.wav
+*.m4a
