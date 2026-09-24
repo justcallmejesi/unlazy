@@ -5,7 +5,7 @@
 
 import { escapeHtml } from "./telegram.mjs";
 import {
-  FREE_INSTRUMENT_LIST, INSTRUMENT_LIST, PAID_INSTRUMENT_LIST, getInstrument, severityOf,
+  FREE_INSTRUMENT_LIST, INSTRUMENT_LIST, PAID_INSTRUMENT_LIST, getInstrument, interpretResult, severityOf,
 } from "./instruments.mjs";
 import { formatLocalDateTime, formatTimeOfDay, formatUtcOffset, offsetAt } from "./reminders.mjs";
 import { MAX_NOTE_LENGTH } from "./store.mjs";
@@ -353,21 +353,25 @@ export function resultMessage(instrument, result, previous, schedule, crisisCont
     const option = impairmentItem.options.find((candidate) => candidate.value === result.impairment);
     if (option) lines.push("Вплив на життя: " + escapeHtml(option.label.toLowerCase()));
   }
+  const meaning = interpretResult(instrument, result);
   lines.push("");
-  lines.push(result.aboveCutoff
-    ? "Бал вище порогу " + instrument.cutoff + ". Це підстава обговорити стан із лікарем або психотерапевтом."
-    : "Бал нижче порогу " + instrument.cutoff + ". Продовжуйте спостерігати за динамікою.");
-  if (instrument.caveat) {
-    lines.push("");
-    lines.push("<i>" + escapeHtml(instrument.caveat) + "</i>");
-  }
+  lines.push(escapeHtml(meaning.description));
+  lines.push("");
+  lines.push(escapeHtml(meaning.advice));
+  // The crisis block goes before the reference material, never after it.
   if (result.risk) {
     lines.push("");
     lines.push(crisisBlock(crisisContact));
   }
   lines.push("");
+  lines.push(validationNote(instrument));
+  lines.push("");
   lines.push(DISCLAIMER);
   return lines.join("\n");
+}
+
+function validationNote(instrument) {
+  return "<i><b>Валідизація.</b> " + escapeHtml(instrument.validation) + "</i>";
 }
 
 // A snapshot edited by hand can omit the derived fields, so both are recomputed

@@ -55,6 +55,12 @@ the rightsholder's permission. Every result of the bot's own scales states that
 it is self-observation and not a validated screening tool. Keep it that way, or
 license a real instrument.
 
+Every result also shows a short state description for its band and a validation
+note. For GAD-7 and PHQ-9 the note gives the original studies' figures and says
+they describe the English originals, since the Ukrainian wording is a working
+translation. For the own scales it says no validation was done. A marked PHQ-9
+risk item below the cutoff replaces the reassuring low-band text.
+
 Above a cutoff, or when the PHQ-9 risk item is marked, the bot offers a
 prefilled `t.me/<CONTACT_USERNAME>?text=` draft naming the person's scores.
 `CONTACT_USERNAME` defaults to the owner's account, `justajsi`, with

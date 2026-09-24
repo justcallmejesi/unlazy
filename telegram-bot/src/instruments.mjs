@@ -4,6 +4,15 @@
 // Scoring and band boundaries follow the published scoring instructions for
 // both instruments. Item 10 of the PHQ-9 (functional impairment) is asked but
 // never added to the total, which is how the instrument defines it.
+//
+// Every band carries a short description of what that level usually means, and
+// every instrument carries a validation note shown with each result. The GAD-7
+// and PHQ-9 figures come from the original validation studies and describe the
+// English originals, which the note says, because a translation can shift them:
+//   Spitzer RL, Kroenke K, Williams JBW, Lowe B. A brief measure for assessing
+//   generalized anxiety disorder: the GAD-7. Arch Intern Med 2006;166:1092-7.
+//   Kroenke K, Spitzer RL, Williams JBW. The PHQ-9: validity of a brief
+//   depression severity measure. J Gen Intern Med 2001;16:606-13.
 
 const FREQUENCY_OPTIONS = [
   { value: 0, label: "Зовсім не турбували" },
@@ -26,8 +35,8 @@ function topValue(item) {
   return item.options.reduce((best, option) => Math.max(best, option.value), 0);
 }
 
-// PSS-10 asks four questions the positive way round, so their answers count
-// backwards: "often felt in control" lowers the stress total.
+// Items worded the positive way round count backwards: "coped with what came
+// my way" lowers the stress total instead of raising it.
 export function itemContribution(item, answer) {
   return item.reverse ? topValue(item) - answer : answer;
 }
@@ -49,11 +58,33 @@ export const GAD7 = {
     scored("Дратівливість або спалахи гніву"),
     scored("Страх, що станеться щось жахливе"),
   ],
+  validation: "Spitzer та співавт., 2006: 2740 пацієнтів первинної медичної допомоги. " +
+    "Внутрішня узгодженість α = 0,92. Для порогу 10: чутливість 89% і специфічність 82% " +
+    "щодо генералізованого тривожного розладу. Показники отримано для англомовного оригіналу.",
   bands: [
-    { max: 4, label: "мінімальна тривога" },
-    { max: 9, label: "легка тривога" },
-    { max: 14, label: "помірна тривога" },
-    { max: 21, label: "виражена тривога" },
+    {
+      max: 4,
+      label: "мінімальна тривога",
+      description: "Тривога майже не турбує. Хвилювання, якщо й буває, минає саме і не заважає звичному життю.",
+    },
+    {
+      max: 9,
+      label: "легка тривога",
+      description: "Тривога часом помітна: напруження, неспокій, думки, які важко відпустити. " +
+        "Здебільшого вона не заважає справам.",
+    },
+    {
+      max: 14,
+      label: "помірна тривога",
+      description: "Тривога турбує більшу частину часу і, ймовірно, вже позначається на сні, " +
+        "зосередженості або стосунках.",
+    },
+    {
+      max: 21,
+      label: "виражена тривога",
+      description: "Тривога сильна й майже постійна. Імовірно, вона суттєво заважає працювати, " +
+        "відпочивати і спілкуватися.",
+    },
   ],
 };
 
@@ -84,12 +115,39 @@ export const PHQ9 = {
       scored: false,
     },
   ],
+  validation: "Kroenke та співавт., 2001: 6000 пацієнтів первинної медичної допомоги та " +
+    "акушерсько-гінекологічних клінік. Внутрішня узгодженість α від 0,86 до 0,89. Для порогу 10: " +
+    "чутливість 88% і специфічність 88% щодо великого депресивного розладу. " +
+    "Показники отримано для англомовного оригіналу.",
   bands: [
-    { max: 4, label: "мінімальні прояви" },
-    { max: 9, label: "легкі прояви" },
-    { max: 14, label: "помірні прояви" },
-    { max: 19, label: "помірно тяжкі прояви" },
-    { max: 27, label: "тяжкі прояви" },
+    {
+      max: 4,
+      label: "мінімальні прояви",
+      description: "Ознак депресії майже немає: настрій, інтерес до справ і сили здебільшого в нормі.",
+    },
+    {
+      max: 9,
+      label: "легкі прояви",
+      description: "Є окремі ознаки зниженого настрою, втоми або втрати інтересу, але вони здебільшого " +
+        "не заважають звичному життю.",
+    },
+    {
+      max: 14,
+      label: "помірні прояви",
+      description: "Знижений настрій, втома або втрата інтересу помітні більшу частину часу і, ймовірно, " +
+        "вже впливають на повсякдення.",
+    },
+    {
+      max: 19,
+      label: "помірно тяжкі прояви",
+      description: "Прояви депресії виражені й суттєво заважають працювати, відпочивати та спілкуватися.",
+    },
+    {
+      max: 27,
+      label: "тяжкі прояви",
+      description: "Прояви депресії дуже сильні й зачіпають більшість сфер життя. У такому стані " +
+        "особливо важливо не залишатися з цим наодинці.",
+    },
   ],
 };
 
@@ -98,6 +156,9 @@ export const PHQ9 = {
 // copyrighted and this bot is sold, so these two are original, carry no
 // licence, and say plainly in every result that they are self-observation
 // scales and not validated screening tools.
+
+const OWN_SCALE_VALIDATION = "Не проводилась. Це власна шкала самоспостереження цього бота, " +
+  "а не валідований опитувальник: вона показує динаміку, але не є скринінгом.";
 
 const SLEEP_OPTIONS = [
   { value: 0, label: "Ніколи" },
@@ -118,7 +179,7 @@ export const SLEEP = {
   maxScore: 28,
   cutoff: 14,
   paid: true,
-  caveat: "Це власна шкала самоспостереження цього бота, а не валідований опитувальник.",
+  validation: OWN_SCALE_VALIDATION,
   items: [
     sleepItem("Довго не могли заснути"),
     sleepItem("Прокидалися вночі і не могли заснути знову"),
@@ -129,10 +190,29 @@ export const SLEEP = {
     sleepItem("Хвилювалися через власний сон"),
   ],
   bands: [
-    { max: 6, label: "сон спокійний" },
-    { max: 13, label: "легкі порушення сну" },
-    { max: 20, label: "помірні порушення сну" },
-    { max: 28, label: "виражені порушення сну" },
+    {
+      max: 6,
+      label: "сон спокійний",
+      description: "Сон здебільшого спокійний, і вранці Ви почуваєтеся відпочилими.",
+    },
+    {
+      max: 13,
+      label: "легкі порушення сну",
+      description: "Сон часом збивається: довше засинаєте, прокидаєтеся вночі або зранку почуваєтеся " +
+        "не зовсім відпочилими.",
+    },
+    {
+      max: 20,
+      label: "помірні порушення сну",
+      description: "Проблеми зі сном повторюються регулярно і, ймовірно, вже позначаються на силах " +
+        "і настрої вдень.",
+    },
+    {
+      max: 28,
+      label: "виражені порушення сну",
+      description: "Сон порушений більшість ночей. Недосип помітно виснажує і позначається на " +
+        "самопочутті вдень.",
+    },
   ],
 };
 
@@ -157,7 +237,7 @@ export const STRESS = {
   maxScore: 32,
   cutoff: 20,
   paid: true,
-  caveat: "Це власна шкала самоспостереження цього бота, а не валідований опитувальник.",
+  validation: OWN_SCALE_VALIDATION,
   items: [
     stressItem("Напруження, від якого важко було розслабитися"),
     stressItem("Відчуття, що справ більше, ніж Ви здатні витримати"),
@@ -169,9 +249,23 @@ export const STRESS = {
     stressItem("Відчуття, що Ви не встигаєте за власним життям"),
   ],
   bands: [
-    { max: 9, label: "низький рівень напруження" },
-    { max: 19, label: "помірний рівень напруження" },
-    { max: 32, label: "високий рівень напруження" },
+    {
+      max: 9,
+      label: "низький рівень напруження",
+      description: "Напруження невелике, і після навантажень Вам здебільшого вдається відновлюватися.",
+    },
+    {
+      max: 19,
+      label: "помірний рівень напруження",
+      description: "Напруження відчутне: бувають періоди, коли справ забагато, а відпочинок допомагає " +
+        "не повністю.",
+    },
+    {
+      max: 32,
+      label: "високий рівень напруження",
+      description: "Напруження високе і тримається довго. Відпочинок мало допомагає, і сили, ймовірно, " +
+        "на межі.",
+    },
   ],
 };
 
@@ -203,9 +297,35 @@ export function scoreAnswers(instrument, answers) {
   return total;
 }
 
-export function severityOf(instrument, score) {
+// A score above the top band, which only a hand-edited snapshot can hold,
+// falls into the top band rather than into none.
+export function bandOf(instrument, score) {
   const band = instrument.bands.find((candidate) => score <= candidate.max);
-  return band ? band.label : instrument.bands[instrument.bands.length - 1].label;
+  return band || instrument.bands[instrument.bands.length - 1];
+}
+
+export function severityOf(instrument, score) {
+  return bandOf(instrument, score).label;
+}
+
+// What a result means and what to do next, worded once for the chat and the
+// app. A marked risk item outranks a low total: the reassuring words of the
+// lower bands would contradict the support block shown beside them.
+export function interpretResult(instrument, result) {
+  const riskBelowCutoff = Boolean(result.risk) && !result.aboveCutoff;
+  let advice = "Бал нижче порогу " + instrument.cutoff + ". Продовжуйте спостерігати за динамікою.";
+  if (result.aboveCutoff) {
+    advice = "Бал вище порогу " + instrument.cutoff + ". Це підстава обговорити стан із лікарем або психотерапевтом.";
+  } else if (riskBelowCutoff) {
+    advice = "Бал нижче порогу " + instrument.cutoff + ", але відповідь про думки щодо смерті чи " +
+      "самоушкодження варто обговорити з фахівцем, не чекаючи наступного тесту.";
+  }
+  return {
+    description: riskBelowCutoff
+      ? "Сума балів невисока, але одна з відповідей важливіша за суму."
+      : bandOf(instrument, result.score).description,
+    advice,
+  };
 }
 
 export function riskFlagged(instrument, answers) {

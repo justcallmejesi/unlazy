@@ -10,7 +10,7 @@
 // readable without any backend, which is the only reason this app needs nothing
 // but static hosting.
 
-import { INSTRUMENTS, INSTRUMENT_LIST, buildResult, severityOf } from "./instruments.mjs";
+import { INSTRUMENTS, INSTRUMENT_LIST, buildResult, interpretResult, severityOf } from "./instruments.mjs";
 
 // One hue per scale. On a light surface the four clear every check; on the
 // dark surface the navy and the light blue sit closer than the separation
@@ -327,13 +327,13 @@ async function finish() {
   $("result-score").textContent = String(result.score);
   $("result-max").textContent = " / " + instrument.maxScore;
   $("result-band").textContent = "Оцінка: " + result.severity;
+  const meaning = interpretResult(instrument, result);
+  $("result-description").textContent = meaning.description;
   const delta = previous ? result.score - previous.score : null;
   $("result-delta").textContent = previous
     ? "Минулого разу " + previous.score + ", " + (delta === 0 ? "без змін" : (delta > 0 ? "+" : "") + delta)
     : "Перше проходження, порівнювати поки ні з чим.";
-  $("result-cutoff").textContent = result.aboveCutoff
-    ? "Бал вище порогу " + instrument.cutoff + ". Це підстава обговорити стан із лікарем або психотерапевтом."
-    : "Бал нижче порогу " + instrument.cutoff + ". Продовжуйте спостерігати за динамікою.";
+  $("result-cutoff").textContent = meaning.advice;
 
   const crisis = $("result-crisis");
   crisis.hidden = !result.risk;
@@ -352,6 +352,13 @@ async function finish() {
     link.textContent = "howareu.com";
     crisis.appendChild(link);
   }
+
+  const validation = $("result-validation");
+  validation.textContent = "";
+  const label = document.createElement("b");
+  label.textContent = "Валідизація. ";
+  validation.appendChild(label);
+  validation.appendChild(document.createTextNode(instrument.validation));
 
   await saveResultLocally(result);
   state.results = await loadResults();
