@@ -16,6 +16,7 @@ export class SessionManager {
     this.byChat = new Map();
     this.notesByChat = new Map();
     this.bookingsByChat = new Map();
+    this.applicationsByChat = new Map();
     this.counter = 0;
     this.idleTimeoutMs = options.idleTimeoutMs === undefined ? 60 * 60 * 1000 : Number(options.idleTimeoutMs);
   }
@@ -155,5 +156,35 @@ export class SessionManager {
 
   pendingBookingCount() {
     return this.bookingsByChat.size;
+  }
+
+  // A specialist's application in progress: name, then credentials, then the
+  // terms. Memory only; an interrupted application just starts again.
+  startApplication(chatId, nowMs) {
+    const application = { chatId: Number(chatId), step: "name", name: null, credentials: null,
+      updatedAt: nowMs === undefined ? Date.now() : nowMs };
+    this.applicationsByChat.set(application.chatId, application);
+    return application;
+  }
+
+  application(chatId, nowMs) {
+    const application = this.applicationsByChat.get(Number(chatId));
+    if (!application) return null;
+    if (nowMs !== undefined && this.idleTimeoutMs > 0 && nowMs - application.updatedAt > this.idleTimeoutMs) {
+      this.applicationsByChat.delete(application.chatId);
+      return null;
+    }
+    return application;
+  }
+
+  updateApplication(chatId, patch, nowMs) {
+    const application = this.application(chatId, nowMs);
+    if (!application) return null;
+    Object.assign(application, patch, { updatedAt: nowMs === undefined ? Date.now() : nowMs });
+    return application;
+  }
+
+  clearApplication(chatId) {
+    return this.applicationsByChat.delete(Number(chatId));
   }
 }

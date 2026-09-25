@@ -22,7 +22,7 @@ See `telegram-bot/README.md`. Locale-bearing values:
 | --- | --- |
 | Questionnaire items, options, severity bands | `telegram-bot/src/instruments.mjs` |
 | Practices, SOS steps, mood tags, booking options | `telegram-bot/src/selfhelp.mjs` |
-| All user-facing copy | `telegram-bot/src/texts.mjs`, plus inline strings in `telegram-bot/src/router.mjs` |
+| All user-facing copy | `telegram-bot/src/texts.mjs`, specialist mode and consent in `telegram-bot/src/psytexts.mjs`, plus inline strings in `telegram-bot/src/router.mjs` |
 | Crisis contacts | `DEFAULT_CRISIS_CONTACT` in `telegram-bot/src/config.mjs`, overridable with `CRISIS_CONTACT` |
 | Price, trial, entitlement | `telegram-bot/src/billing.mjs`, `PRICE_STARS` and `TRIAL_DAYS` |
 | Default reminder zone and slot | `REMINDER_ZONE`, `REMINDER_WEEKDAY`, `REMINDER_TIME` in `telegram-bot/src/config.mjs`, per-user override with `/tz` |
@@ -52,6 +52,16 @@ feature to sell.
 Paid: the sleep, stress, PCL-5 and wellbeing scales, the daily mood check-in
 (`/mood`), history (`/results`, `/last`), statistics, the weekly reminder and
 its settings (`/remind`, `/tz`).
+
+Specialist mode is a separate monthly Stars subscription, `PSY_PRICE_STARS` 177,
+sold through `createInvoiceLink` with `subscription_period`. Who pays: a client
+pays for the paid features they use; a specialist pays for the cabinet (client
+list, cards, reports, alerts). The subscription unlocks nothing for clients.
+The owner approves every specialist (`ADMIN_USERNAME`, bound to a chat id on
+first contact, or `ADMIN_CHAT_ID`) and uses the cabinet free. A specialist reads
+a client only while approved, subscribed and holding that client's consent.
+The consent form is versioned by `CONSENT_VERSION` in `psy.mjs`: change the
+substance of the text, bump the version. Revoking stays one tap in `/privacy`.
 
 PCL-5 is in the public domain and ships as published. WHO-5 was asked for but
 is CC BY-NC-SA: no commercial use, and copying its items without the name is

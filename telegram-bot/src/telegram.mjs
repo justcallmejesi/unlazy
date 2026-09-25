@@ -185,7 +185,10 @@ export class TelegramClient {
         offset: options.offset,
         timeout: timeoutSeconds,
         limit: options.limit === undefined ? 100 : Number(options.limit),
-        allowed_updates: options.allowedUpdates || ["message", "callback_query"],
+        // pre_checkout_query must be listed: without it Telegram never
+        // delivers the query, nothing answers it within ten seconds, and every
+        // Stars payment fails at the last step.
+        allowed_updates: options.allowedUpdates || ["message", "callback_query", "pre_checkout_query"],
       },
       { timeoutMs: (timeoutSeconds + 20) * 1000, maxAttempts: 1 },
     );

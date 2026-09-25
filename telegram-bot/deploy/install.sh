@@ -104,6 +104,10 @@ WEBAPP_URL=
 PRICE_STARS=100
 TRIAL_DAYS=14
 
+# Specialist cabinet: monthly subscription in Stars. The owner who approves
+# specialists defaults to CONTACT_USERNAME.
+PSY_PRICE_STARS=177
+
 # Account for the help offer shown above the cutoff, no at sign. Defaults to
 # justajsi in the code; set it empty here to switch the offer off.
 CONTACT_USERNAME=justajsi

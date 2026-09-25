@@ -51,10 +51,17 @@ export class BotRuntime {
     this.tickTimer = null;
   }
 
+  // An action may carry `then`: a function of the call's result that returns
+  // follow-up actions. createInvoiceLink needs it, since the link it returns
+  // has to be put into a message; the router itself never waits on I/O.
   async runActions(actions) {
     for (const action of actions) {
       try {
-        await this.client.call(action.method, action.payload);
+        const result = await this.client.call(action.method, action.payload);
+        if (typeof action.then === "function") {
+          const next = action.then(result);
+          if (Array.isArray(next) && next.length) await this.runActions(next);
+        }
       } catch (error) {
         const detail = error instanceof TelegramError ? error.message : this.client.redact(String(error && error.message));
         logError("action " + action.method + " failed: " + detail);
@@ -240,6 +247,8 @@ async function main() {
   const client = new TelegramClient({ token: config.token, apiBase: config.apiBase, log });
   const me = await client.getMe();
   log("authorized as @" + (me && me.username));
+  // Invite links for specialists point at t.me/<this bot>.
+  config.botUsername = me && me.username ? String(me.username) : null;
   try {
     await client.setMyCommands(COMMANDS
       .filter((entry) => entry.command !== "app" || config.webappUrl)

@@ -39,6 +39,64 @@ function defaultUser(chatId) {
     pro: null,
     results: [],
     moods: [],
+    // A specialist's profile, or null for everyone else.
+    psy: null,
+    // Consents this person gave to specialists, revoked ones kept as a record.
+    shares: [],
+  };
+}
+
+const PSY_STATUSES = ["pending", "approved", "rejected"];
+
+function boundedText(value, limit) {
+  return typeof value === "string" ? value.trim().slice(0, limit) : "";
+}
+
+function isoOrNull(value) {
+  return typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : null;
+}
+
+// A subscription counts only with the charge id Telegram issued, like the
+// one-time purchase: a hand-edited expiry grants nothing.
+function normalizePsy(raw) {
+  if (!raw || typeof raw !== "object" || PSY_STATUSES.indexOf(raw.status) === -1) return null;
+  const sub = raw.subscription;
+  const subscription = sub && typeof sub === "object" && typeof sub.firstChargeId === "string" && sub.firstChargeId &&
+    Number.isFinite(sub.expiresAt)
+    ? {
+      firstChargeId: sub.firstChargeId,
+      lastChargeId: typeof sub.lastChargeId === "string" ? sub.lastChargeId : sub.firstChargeId,
+      expiresAt: Number(sub.expiresAt),
+      stars: Number(sub.stars) || 0,
+      since: isoOrNull(sub.since),
+      canceled: sub.canceled === true,
+    }
+    : null;
+  return {
+    status: raw.status,
+    name: boundedText(raw.name, 120),
+    credentials: boundedText(raw.credentials, 400),
+    username: boundedText(raw.username, 32),
+    appliedAt: isoOrNull(raw.appliedAt),
+    decidedAt: isoOrNull(raw.decidedAt),
+    termsVersion: boundedText(raw.termsVersion, 32),
+    inviteCode: typeof raw.inviteCode === "string" && /^[A-Za-z0-9]{8,32}$/.test(raw.inviteCode) ? raw.inviteCode : null,
+    subscription,
+  };
+}
+
+function normalizeShare(raw) {
+  if (!raw || typeof raw !== "object" || !Number.isInteger(raw.psy)) return null;
+  const grantedAt = isoOrNull(raw.grantedAt);
+  if (!grantedAt) return null;
+  return {
+    psy: raw.psy,
+    clientName: boundedText(raw.clientName, 64),
+    grantedAt,
+    version: boundedText(raw.version, 32),
+    notes: raw.notes === true,
+    revokedAt: isoOrNull(raw.revokedAt),
+    revokedBy: raw.revokedBy === "psy" || raw.revokedBy === "client" ? raw.revokedBy : null,
   };
 }
 
@@ -86,6 +144,8 @@ function normalizeUser(chatId, raw) {
     ? raw.moods.map(normalizeMood).filter(Boolean).sort((left, right) => (left.date < right.date ? -1 : 1))
       .slice(-MAX_MOODS_PER_USER)
     : [];
+  user.psy = normalizePsy(raw.psy);
+  user.shares = Array.isArray(raw.shares) ? raw.shares.map(normalizeShare).filter(Boolean) : [];
   return user;
 }
 
@@ -96,6 +156,8 @@ export class Store {
     this.writeDelayMs = options.writeDelayMs === undefined ? 1000 : Number(options.writeDelayMs);
     this.users = new Map();
     this.offset = 0;
+    // Bot-wide state that belongs to no single user.
+    this.meta = { adminChatId: null };
     this.dirty = false;
     this.timer = null;
     // Both limits are injectable so the ceiling behaviour is testable without
@@ -136,6 +198,8 @@ export class Store {
       throw new Error("snapshot root must be an object");
     }
     this.offset = Number.isFinite(parsed.offset) ? Number(parsed.offset) : 0;
+    const meta = parsed.meta && typeof parsed.meta === "object" ? parsed.meta : {};
+    this.meta = { adminChatId: Number.isInteger(meta.adminChatId) ? meta.adminChatId : null };
     const users = parsed.users && typeof parsed.users === "object" ? parsed.users : {};
     Object.keys(users).forEach((key) => {
       const chatId = Number(key);
@@ -162,6 +226,12 @@ export class Store {
 
   allUsers() {
     return Array.from(this.users.values());
+  }
+
+  setMeta(patch) {
+    Object.assign(this.meta, patch);
+    this.touch();
+    return this.meta;
   }
 
   setOffset(offset) {
@@ -287,7 +357,7 @@ export class Store {
     this.users.forEach((user, chatId) => {
       users[String(chatId)] = user;
     });
-    return { version: SNAPSHOT_VERSION, savedAt: new Date().toISOString(), offset: this.offset, users };
+    return { version: SNAPSHOT_VERSION, savedAt: new Date().toISOString(), offset: this.offset, meta: this.meta, users };
   }
 
   flush() {

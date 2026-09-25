@@ -24,6 +24,9 @@ import {
 } from "../src/selfhelp.mjs";
 import { REPORT_COLORS, buildReport } from "../src/report.mjs";
 import {
+  CONSENT_VERSION, SUBSCRIPTION_PERIOD_SECONDS, activeShare, clientsOf, psyState,
+} from "../src/psy.mjs";
+import {
   applyPayment, checkPreCheckout, ensureTrial, entitlement, invoiceFor, isPro,
 } from "../src/billing.mjs";
 import { Store, MAX_NOTE_LENGTH, MAX_RESULTS_PER_USER } from "../src/store.mjs";
@@ -64,6 +67,9 @@ function fixtureConfig(overrides = {}) {
     dataFile: null,
     webappUrl: null,
     contact: { username: "", name: "", role: "" },
+    admin: { username: "", chatId: null },
+    psy: { stars: 177, title: "Кабінет фахівця", description: "Клієнти і сповіщення. Щомісячна підписка." },
+    botUsername: "test_bot",
     price: {
       stars: 100,
       trialDays: 14,
@@ -721,6 +727,441 @@ test("webapp: the launch URL carries the public contact for the SOS screen", () 
   const h = harness({ config: { webappUrl: "https://example.pages.dev/", contact: BOOKING_CONTACT } });
   const url = h.say("/start")[0].payload.reply_markup.keyboard[0][0].web_app.url;
   assert.equal(url, "https://example.pages.dev/?pro=1&c=helper_psy&cn=" + encodeURIComponent("Олексій"));
+});
+
+// --------------------------------------------------------------- specialist mode
+
+const OWNER = 5000;
+const PSY = 6000;
+const CLIENT = 777;
+
+// A harness with an owner, a specialist and a client who can all talk to the
+// same router. The owner is bound by username on their first message.
+function psyHarness(overrides = {}) {
+  const h = harness({ config: Object.assign({
+    admin: { username: "owner_acc", chatId: null },
+    contact: { username: "owner_acc", name: "Олексій", role: "психолог" },
+  }, overrides.config || {}) });
+  const as = (chatId, username, firstName) => ({
+    say: (text) => h.router.handleUpdate({
+      update_id: 1,
+      message: { message_id: 10, chat: { id: chatId, type: "private" },
+        from: { id: chatId, username, first_name: firstName }, text },
+    }),
+    tap: (data) => h.router.handleUpdate({
+      update_id: 2,
+      callback_query: { id: "cb", data, from: { id: chatId, username, first_name: firstName },
+        message: { message_id: 11, chat: { id: chatId, type: "private" } } },
+    }),
+    pay: (payment) => h.router.handleUpdate({
+      update_id: 3,
+      message: { message_id: 12, chat: { id: chatId, type: "private" }, from: { id: chatId, username },
+        successful_payment: payment },
+    }),
+  });
+  return Object.assign(h, {
+    owner: as(OWNER, "owner_acc", "Олексій"),
+    psy: as(PSY, "anna_psy", "Анна"),
+    client: as(CLIENT, "olya", "Оля"),
+  });
+}
+
+function applyAs(actor, name, credentials) {
+  actor.tap("py|apply");
+  actor.say(name);
+  actor.say(credentials);
+  return actor.tap("py|terms");
+}
+
+function subscribe(h, chatId, expiresAtMs, first = true) {
+  return h.psy.pay({
+    currency: "XTR", total_amount: 177, invoice_payload: "psy-v1:" + chatId,
+    telegram_payment_charge_id: first ? "sub_first" : "sub_renew_" + expiresAtMs,
+    subscription_expiration_date: Math.floor(expiresAtMs / 1000), is_recurring: true, is_first_recurring: first,
+  });
+}
+
+// Owner bound, specialist approved and subscribed, client linked with consent.
+function linkedHarness() {
+  const h = psyHarness();
+  h.owner.say("/start");
+  applyAs(h.psy, "Анна Коваль", "Психолог, КНУ, 5 років практики");
+  h.owner.tap("ap|" + PSY);
+  subscribe(h, PSY, h.clock.now + 30 * DAY_MS);
+  const code = h.store.user(PSY).psy.inviteCode || (h.psy.say("/psy"), h.store.user(PSY).psy.inviteCode);
+  h.client.say("/start c_" + code);
+  h.client.tap("cs|yes|" + code);
+  return Object.assign(h, { code });
+}
+
+test("psy: the state follows approval, subscription and the owner's free access", () => {
+  const at = WED_NOON_UTC;
+  assert.equal(psyState(null, at, false).kind, "none");
+  assert.equal(psyState({ psy: { status: "pending" } }, at, false).kind, "pending");
+  assert.equal(psyState({ psy: { status: "rejected" } }, at, false).active, false);
+  assert.equal(psyState({ psy: { status: "approved", subscription: null } }, at, false).kind, "unsubscribed");
+  const live = { psy: { status: "approved", subscription: { expiresAt: at + DAY_MS, canceled: true } } };
+  assert.deepEqual([psyState(live, at, false).kind, psyState(live, at, false).canceled], ["subscribed", true]);
+  assert.equal(psyState(live, at + 2 * DAY_MS, false).kind, "expired");
+  assert.equal(psyState(null, at, true).kind, "admin", "the owner needs no subscription");
+});
+
+test("psy: the owner is bound by username once, and a later namesake gains nothing", () => {
+  const h = psyHarness();
+  assert.equal(h.store.meta.adminChatId, null);
+  h.owner.say("/start");
+  assert.equal(h.store.meta.adminChatId, OWNER);
+  // Someone else takes the same username later: the chat id decides.
+  const impostor = h.router.handleUpdate({ update_id: 9, message: { message_id: 1,
+    chat: { id: 4242, type: "private" }, from: { id: 4242, username: "owner_acc" }, text: "/admin" } });
+  assert.match(lastText(impostor), /лише для власника/);
+  assert.match(lastText(h.owner.say("/admin")), /Нових заявок немає/);
+  // A pinned id wins over any username.
+  const pinned = psyHarness({ config: { admin: { username: "owner_acc", chatId: 9 } } });
+  pinned.owner.say("/start");
+  assert.equal(pinned.store.meta.adminChatId, null);
+  assert.match(lastText(pinned.owner.say("/admin")), /лише для власника/);
+});
+
+test("psy: an application goes through name, credentials and terms, then waits for the owner", () => {
+  const h = psyHarness();
+  h.owner.say("/start");
+  assert.match(lastText(h.psy.say("/psy")), /Кабінет фахівця[\s\S]*177 зірок на місяць/);
+  assert.match(lastText(h.psy.tap("py|apply")), /крок 1 з 3/);
+  assert.match(lastText(h.psy.say("Анна  Коваль")), /Крок 2 з 3/);
+  const terms = h.psy.say("Психолог, КНУ, 5 років практики");
+  assert.match(lastText(terms), /умови для фахівця/);
+  assert.match(lastText(terms), /не передаєте ці дані третім особам/i);
+  const submitted = h.psy.tap("py|terms");
+  assert.match(textsOf(submitted)[0], /Заявку надіслано/);
+  const toOwner = submitted.find((action) => action.payload.chat_id === OWNER);
+  assert.match(toOwner.payload.text, /Нова заявка фахівця[\s\S]*Анна Коваль[\s\S]*@anna_psy/);
+  assert.deepEqual(toOwner.payload.reply_markup.inline_keyboard[0].map((b) => b.callback_data), ["ap|" + PSY, "rj|" + PSY]);
+  const profile = h.store.user(PSY).psy;
+  assert.equal(profile.status, "pending");
+  assert.equal(profile.name, "Анна Коваль");
+  assert.equal(profile.termsVersion, "2026-09-v1");
+  assert.match(lastText(h.psy.say("/psy")), /на розгляді/);
+});
+
+test("psy: only the owner decides, and the decision reaches the specialist", () => {
+  const h = psyHarness();
+  h.owner.say("/start");
+  applyAs(h.psy, "Анна Коваль", "Психолог");
+  assert.match(lastText(h.client.tap("ap|" + PSY)), /лише для власника/);
+  assert.equal(h.store.user(PSY).psy.status, "pending");
+  const approved = h.owner.tap("ap|" + PSY);
+  assert.match(textsOf(approved)[0], /Схвалено: Анна Коваль/);
+  const notice = approved.find((action) => action.payload.chat_id === PSY);
+  assert.match(notice.payload.text, /Заявку схвалено/);
+  assert.equal(notice.payload.reply_markup.inline_keyboard[0][0].callback_data, "py|sub");
+  const other = psyHarness();
+  other.owner.say("/start");
+  applyAs(other.psy, "Хтось", "Без кваліфікації");
+  const rejected = other.owner.tap("rj|" + PSY);
+  assert.match(rejected.find((action) => action.payload.chat_id === PSY).payload.text, /відхилено/);
+  assert.match(lastText(other.psy.say("/psy")), /відхилено/);
+});
+
+test("psy: the subscription is a 30-day Stars invoice link, and the link becomes a button", () => {
+  const h = psyHarness();
+  h.owner.say("/start");
+  applyAs(h.psy, "Анна Коваль", "Психолог");
+  assert.equal(h.psy.tap("py|sub").filter((a) => a.method === "createInvoiceLink").length, 0, "not before approval");
+  h.owner.tap("ap|" + PSY);
+  const invoice = h.psy.tap("py|sub").find((action) => action.method === "createInvoiceLink");
+  assert.equal(invoice.payload.currency, "XTR");
+  assert.equal(invoice.payload.subscription_period, SUBSCRIPTION_PERIOD_SECONDS);
+  assert.equal(SUBSCRIPTION_PERIOD_SECONDS, 2592000);
+  assert.equal(invoice.payload.payload, "psy-v1:" + PSY);
+  assert.deepEqual(invoice.payload.prices, [{ label: "Кабінет фахівця", amount: 177 }]);
+  const follow = invoice.then("https://t.me/$abc");
+  assert.equal(follow[0].payload.reply_markup.inline_keyboard[0][0].url, "https://t.me/$abc");
+  assert.deepEqual(invoice.then(undefined), [], "no link, no button");
+});
+
+test("psy: the pre-checkout accepts only an approved specialist paying for their own cabinet", () => {
+  const h = psyHarness();
+  h.owner.say("/start");
+  applyAs(h.psy, "Анна Коваль", "Психолог");
+  const query = (from, payload) => h.router.handleUpdate({ update_id: 4, pre_checkout_query: {
+    id: "q1", from: { id: from }, currency: "XTR", total_amount: 177, invoice_payload: payload } })[0].payload;
+  assert.equal(query(PSY, "psy-v1:" + PSY).ok, false, "pending specialists cannot pay yet");
+  h.owner.tap("ap|" + PSY);
+  assert.equal(query(PSY, "psy-v1:" + PSY).ok, true);
+  assert.equal(query(CLIENT, "psy-v1:" + PSY).ok, false, "a forwarded link is refused");
+  assert.equal(query(CLIENT, "pro-v1:" + CLIENT).ok, true, "the client purchase still works");
+});
+
+test("psy: the first payment opens the cabinet, renewals extend it, and neither unlocks client features", () => {
+  const h = psyHarness();
+  h.owner.say("/start");
+  applyAs(h.psy, "Анна Коваль", "Психолог");
+  h.owner.tap("ap|" + PSY);
+  const first = subscribe(h, PSY, h.clock.now + 30 * DAY_MS);
+  assert.match(lastText(first), /Кабінет відкрито/);
+  const sub = h.store.user(PSY).psy.subscription;
+  assert.equal(sub.firstChargeId, "sub_first");
+  assert.equal(sub.expiresAt, Math.floor((h.clock.now + 30 * DAY_MS) / 1000) * 1000);
+  assert.equal(h.store.user(PSY).pro, null, "the subscription is not the client purchase");
+  h.clock.now += 29 * DAY_MS;
+  const renewal = subscribe(h, PSY, h.clock.now + 31 * DAY_MS, false);
+  assert.match(lastText(renewal), /продовжено/);
+  assert.equal(h.store.user(PSY).psy.subscription.firstChargeId, "sub_first", "cancel needs the first charge");
+  assert.equal(psyState(h.store.user(PSY), h.clock.now + 30 * DAY_MS, false).active, true);
+});
+
+test("psy: the dashboard shows the invite link, and a new link retires the old one", () => {
+  const h = linkedHarness();
+  const dash = lastText(h.psy.say("/psy"));
+  assert.match(dash, new RegExp("https://t\\.me/test_bot\\?start=c_" + h.code));
+  assert.match(dash, /Клієнтів зі згодою: 1/);
+  const rotated = lastText(h.psy.say("/invite new"));
+  const fresh = h.store.user(PSY).psy.inviteCode;
+  assert.notEqual(fresh, h.code);
+  assert.match(rotated, new RegExp("c_" + fresh));
+  const stranger = h.router.handleUpdate({ update_id: 5, message: { message_id: 1, chat: { id: 31, type: "private" },
+    from: { id: 31 }, text: "/start c_" + h.code } });
+  assert.match(lastText(stranger), /недійсне або застаріло/);
+  assert.equal(clientsOf(h.store, PSY).length, 1, "existing clients stay");
+});
+
+test("consent: the form says what is shared, what is not, why, how to revoke, and on what legal basis", () => {
+  const h = psyHarness();
+  h.owner.say("/start");
+  applyAs(h.psy, "Анна Коваль", "Психолог");
+  h.owner.tap("ap|" + PSY);
+  subscribe(h, PSY, h.clock.now + 30 * DAY_MS);
+  h.psy.say("/psy");
+  const code = h.store.user(PSY).psy.inviteCode;
+  const form = h.client.say("/start c_" + code);
+  const text = form[0].payload.text;
+  assert.match(text, /Згода на передачу даних фахівцю/);
+  assert.match(text, /Хто:<\/b> Анна Коваль\. Фахівця перевірив власник бота/);
+  assert.match(text, /Що бот збирає про Вас/);
+  assert.match(text, /Що бачитиме фахівець/);
+  assert.match(text, /Нотатки про тиждень фахівець бачитиме, лише якщо Ви окремо це дозволите/);
+  assert.match(text, /Чого фахівець не бачитиме/);
+  assert.match(text, /Як відкликати:<\/b> будь-коли, одним натисканням/);
+  assert.match(text, /Закон України «Про захист персональних даних»/);
+  assert.ok(text.indexOf(CONSENT_VERSION) !== -1);
+  assert.deepEqual(form[0].payload.reply_markup.inline_keyboard[0].map((b) => b.callback_data),
+    ["cs|yes|" + code, "cs|no|" + code]);
+  // Nothing is shared before the tap.
+  assert.equal(activeShare(h.store.user(CLIENT), PSY), null);
+  assert.match(lastText(h.client.tap("cs|no|" + code)), /фахівець нічого не бачить/);
+  assert.equal(activeShare(h.store.user(CLIENT), PSY), null);
+});
+
+test("consent: agreeing records it with the version, asks about notes, and tells the specialist", () => {
+  const h = linkedHarness();
+  const share = activeShare(h.store.user(CLIENT), PSY);
+  assert.equal(share.clientName, "Оля");
+  assert.equal(share.version, CONSENT_VERSION);
+  assert.equal(share.notes, false, "notes stay hidden until allowed");
+  const done = h.client.tap("cn|" + PSY + "|1");
+  assert.match(textsOf(done)[0], /Анна Коваль бачить Ваші результати і нотатки/);
+  assert.equal(done[1].payload.reply_markup.inline_keyboard[0][0].callback_data, "rv|" + PSY);
+  assert.equal(activeShare(h.store.user(CLIENT), PSY).notes, true);
+  assert.ok(done.some((action) => action.payload && action.payload.chat_id === PSY && /нотатки/.test(action.payload.text)));
+  assert.match(lastText(h.client.say("/start c_" + h.code)), /Ви вже ділитеся даними/);
+});
+
+test("consent: revoking is one tap, stops access at once and tells the specialist", () => {
+  const h = linkedHarness();
+  const privacy = h.client.say("/privacy");
+  assert.match(privacy[0].payload.text, /Анна Коваль: з 16\.09\.2026, нотатки приховані/);
+  const buttons = privacy[0].payload.reply_markup.inline_keyboard.flat().map((b) => b.callback_data);
+  assert.deepEqual(buttons, ["rv|" + PSY, "rn|" + PSY + "|1"]);
+  const gone = h.client.tap("rv|" + PSY);
+  assert.match(textsOf(gone)[0], /Згоду відкликано/);
+  assert.ok(gone.some((action) => action.payload.chat_id === PSY && /відкликано/.test(action.payload.text)));
+  assert.equal(activeShare(h.store.user(CLIENT), PSY), null);
+  assert.equal(h.store.user(CLIENT).shares[0].revokedBy, "client", "the record of consent is kept");
+  assert.match(lastText(h.psy.tap("cl|" + CLIENT)), /не надав згоди або відкликав/);
+  assert.match(lastText(h.psy.say("/clients")), /Поки немає клієнтів/);
+  assert.match(lastText(h.client.say("/privacy")), /не ділитеся даними з жодним фахівцем/);
+});
+
+test("psy: the client list and card show results, and notes only when the client allowed them", () => {
+  const h = linkedHarness();
+  completeViaKeyboard(h, GAD7, [2, 2, 2, 2, 2, 2, 2]);
+  h.say("тиждень без сну");
+  h.tap("m|4");
+  const list = lastText(h.psy.say("/clients"));
+  assert.match(list, /⚠️ Оля, з 16\.09\.2026: GAD-7 14\/21, настрій 4,0/);
+  const card = h.psy.tap("cl|" + CLIENT);
+  assert.match(textsOf(card)[0], /<b>GAD-7<\/b>: 14 з 21, помірна тривога/);
+  assert.doesNotMatch(textsOf(card)[0], /тиждень без сну/, "notes are hidden by default");
+  h.client.tap("rn|" + PSY + "|1");
+  assert.match(textsOf(h.psy.tap("cl|" + CLIENT))[0], /тиждень без сну/);
+  const report = h.psy.tap("clr|" + CLIENT).find((action) => action.method === "sendDocument");
+  assert.equal(report.payload.chat_id, PSY);
+  assert.match(report.payload.caption, /Звіт клієнта: Оля/);
+  assert.ok(report.payload.document.content.indexOf("тиждень без сну") !== -1);
+});
+
+test("psy: nobody reads a client without that client's consent to them", () => {
+  const h = linkedHarness();
+  completeViaKeyboard(h, GAD7, [2, 2, 2, 2, 2, 2, 2]);
+  // A second approved, subscribed specialist without consent.
+  const other = 6100;
+  h.store.updateUser(other, { psy: { status: "approved", name: "Інший", subscription: {
+    firstChargeId: "x", lastChargeId: "x", expiresAt: h.clock.now + DAY_MS, stars: 177, since: null, canceled: false } } });
+  const probe = (data) => h.router.handleUpdate({ update_id: 6, callback_query: { id: "p", data, from: { id: other },
+    message: { message_id: 1, chat: { id: other, type: "private" } } } });
+  assert.match(lastText(probe("cl|" + CLIENT)), /не надав згоди/);
+  assert.equal(probe("clr|" + CLIENT).filter((action) => action.method === "sendDocument").length, 0);
+  // The linked specialist loses access when the subscription lapses.
+  h.clock.now += 40 * DAY_MS;
+  assert.match(lastText(h.psy.tap("cl|" + CLIENT)), /частина кабінету фахівця/);
+});
+
+test("psy: a result past the cutoff or with the risk item marked alerts the specialist", () => {
+  const h = linkedHarness();
+  const high = completeViaKeyboard(h, GAD7, [2, 2, 2, 2, 2, 2, 2]);
+  const alert = high.find((action) => action.payload && action.payload.chat_id === PSY);
+  assert.match(alert.payload.text, /⚠️ <b>Оля<\/b>\nGAD-7: 14 з 21, помірна тривога\./);
+  assert.equal(alert.payload.reply_markup.inline_keyboard[0][0].callback_data, "cl|" + CLIENT);
+  const risky = completeViaKeyboard(h, PHQ9, [0, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
+  assert.match(risky.find((action) => action.payload && action.payload.chat_id === PSY).payload.text, /питання 9 PHQ-9/);
+  const calm = completeViaKeyboard(h, GAD7, [0, 0, 0, 0, 0, 0, 0]);
+  assert.equal(calm.filter((action) => action.payload && action.payload.chat_id === PSY).length, 0, "calm results stay quiet");
+  // No alerts once the subscription lapsed or the consent is gone.
+  h.clock.now += 40 * DAY_MS;
+  const lapsed = completeViaKeyboard(h, GAD7, [3, 3, 3, 3, 3, 3, 3]);
+  assert.equal(lapsed.filter((action) => action.payload && action.payload.chat_id === PSY).length, 0);
+});
+
+test("psy: disconnecting a client ends the consent and tells the client", () => {
+  const h = linkedHarness();
+  const cut = h.psy.tap("cld|" + CLIENT);
+  assert.match(textsOf(cut)[0], /Оля відключено/);
+  assert.ok(cut.some((action) => action.payload.chat_id === CLIENT && /припинено/.test(action.payload.text)));
+  assert.equal(activeShare(h.store.user(CLIENT), PSY), null);
+  assert.equal(h.store.user(CLIENT).shares[0].revokedBy, "psy");
+});
+
+test("psy: /delete tells the specialist, and a specialist's /delete closes every consent to them", () => {
+  const h = linkedHarness();
+  const wiped = h.client.tap("del|yes");
+  assert.ok(wiped.some((action) => action.payload.chat_id === PSY && /видалив свої дані/.test(action.payload.text)));
+  const again = linkedHarness();
+  const psyWiped = again.psy.tap("del|yes");
+  assert.ok(psyWiped.some((action) => action.payload.chat_id === CLIENT && /більше не користується ботом/.test(action.payload.text)));
+  assert.equal(activeShare(again.store.user(CLIENT), PSY), null);
+});
+
+test("psy: the owner's own cabinet is approved on the spot and free", () => {
+  const h = psyHarness();
+  h.owner.say("/start");
+  assert.match(lastText(h.owner.say("/invite")), /частина кабінету фахівця/, "a profile comes first");
+  const done = applyAs(h.owner, "Олексій", "Психолог");
+  assert.match(lastText(done), /Ви власник бота, кабінет безкоштовний/);
+  assert.equal(h.store.user(OWNER).psy.status, "approved");
+  const code = h.store.user(OWNER).psy.inviteCode;
+  h.client.say("/start c_" + code);
+  h.client.tap("cs|yes|" + code);
+  assert.equal(clientsOf(h.store, OWNER).length, 1);
+  assert.match(lastText(h.owner.say("/clients")), /Оля/);
+});
+
+test("psy: turning auto-renewal off and on goes through editUserStarSubscription with the first charge", () => {
+  const h = linkedHarness();
+  const cancel = h.psy.tap("py|cancel").find((action) => action.method === "editUserStarSubscription");
+  assert.deepEqual(cancel.payload, { user_id: PSY, telegram_payment_charge_id: "sub_first", is_canceled: true });
+  assert.equal(h.store.user(PSY).psy.subscription.canceled, false, "nothing changes until Telegram confirms");
+  assert.match(textsOf(cancel.then(true))[0], /Автопродовження вимкнено/);
+  assert.equal(h.store.user(PSY).psy.subscription.canceled, true);
+  assert.match(lastText(h.psy.say("/psy")), /автопродовження вимкнено/);
+  const resume = h.psy.tap("py|resume").find((action) => action.method === "editUserStarSubscription");
+  assert.equal(resume.payload.is_canceled, false);
+  resume.then(true);
+  assert.equal(h.store.user(PSY).psy.subscription.canceled, false);
+});
+
+test("psy: profiles, consents and the bound owner survive a restart; forged subscriptions do not", () => {
+  const dir = mkdtempSync(join(tmpdir(), "psy-"));
+  try {
+    const file = join(dir, "results.json");
+    const first = new Store({ file, writeDelayMs: 0 });
+    first.setMeta({ adminChatId: OWNER });
+    first.updateUser(PSY, { psy: { status: "approved", name: "Анна", inviteCode: "abcdefghij", subscription: {
+      firstChargeId: "c1", lastChargeId: "c2", expiresAt: 123, stars: 177, since: "2026-09-01T00:00:00.000Z", canceled: true } } });
+    first.updateUser(CLIENT, { shares: [{ psy: PSY, clientName: "Оля", grantedAt: "2026-09-02T00:00:00.000Z",
+      version: CONSENT_VERSION, notes: true, revokedAt: null, revokedBy: null }] });
+    first.updateUser(31, { psy: { status: "approved", subscription: { expiresAt: 9e15 } } });
+    first.flush();
+    const second = new Store({ file });
+    second.load();
+    assert.equal(second.meta.adminChatId, OWNER);
+    assert.equal(second.user(PSY).psy.subscription.canceled, true);
+    assert.equal(second.user(PSY).psy.inviteCode, "abcdefghij");
+    assert.equal(activeShare(second.user(CLIENT), PSY).notes, true);
+    assert.equal(second.user(31).psy.subscription, null, "no charge id, no subscription");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("psy: /export carries consents and the specialist profile", () => {
+  const h = linkedHarness();
+  assert.match(lastText(h.client.say("/export")), /shares/);
+  assert.match(lastText(h.psy.say("/export")), /Анна Коваль/);
+});
+
+test("consent: a client who arrived by invite gets the greeting and the SOS keyboard after consenting", () => {
+  const h = linkedHarness();
+  const done = h.client.tap("cn|" + PSY + "|0");
+  assert.match(textsOf(done)[0], /бачить Ваші результати, без нотаток/);
+  assert.ok(textsOf(done).some((text) => /Я допомагаю регулярно відстежувати стан/.test(text)), "the greeting follows");
+  assert.ok(done.some((action) => action.payload.reply_markup && action.payload.reply_markup.keyboard &&
+    JSON.stringify(action.payload.reply_markup.keyboard).indexOf("Мені зараз погано") !== -1));
+  assert.equal(done.filter((action) => action.payload.chat_id === PSY).length, 0, "no notes, no ping to the specialist");
+});
+
+test("psy: a client's Telegram name cannot break the specialist's messages", () => {
+  const h = psyHarness();
+  h.owner.say("/start");
+  applyAs(h.psy, "Анна Коваль", "Психолог");
+  h.owner.tap("ap|" + PSY);
+  subscribe(h, PSY, h.clock.now + 30 * DAY_MS);
+  h.psy.say("/psy");
+  const code = h.store.user(PSY).psy.inviteCode;
+  const evil = { id: 55, first_name: "<b>Оля</b> & <i>" };
+  h.router.handleUpdate({ update_id: 7, callback_query: { id: "e", data: "cs|yes|" + code, from: evil,
+    message: { message_id: 1, chat: { id: 55, type: "private" } } } });
+  const list = lastText(h.psy.say("/clients"));
+  assert.ok(list.indexOf("&lt;b&gt;Оля&lt;/b&gt; &amp; &lt;i&gt;") !== -1);
+  assert.doesNotMatch(list, /<i>/);
+});
+
+test("paysupport: says what stays free after a refund, and how the specialist subscription ends", () => {
+  const h = harness();
+  const text = lastText(h.say("/paysupport"));
+  assert.doesNotMatch(text, /щотижневе нагадування/, "the reminder is part of the paid access");
+  assert.match(text, /Кабінет фахівця це окрема щомісячна підписка/);
+});
+
+test("runtime: an action's follow-up runs on its result, which is how the invoice link reaches the chat", async () => {
+  const h = runtimeHarness();
+  await h.runtime.runActions([{
+    method: "createInvoiceLink",
+    payload: { title: "x" },
+    then: (link) => [{ method: "sendMessage", payload: { chat_id: 8, text: link } }],
+  }]);
+  assert.deepEqual(h.client.calls.map((call) => call.method), ["createInvoiceLink", "sendMessage"]);
+  assert.equal(h.client.calls[1].payload.text, "https://t.me/$fakeinvoice");
+});
+
+test("config: the specialist price defaults to 177 Stars and stays under Telegram's cap", () => {
+  const config = loadConfig({ BOT_TOKEN: FAKE_TOKEN }, { envFile: false });
+  assert.equal(config.psy.stars, 177);
+  assert.equal(config.admin.username, "justajsi", "the owner defaults to the contact");
+  assert.equal(config.admin.chatId, null);
+  assert.equal(loadConfig({ BOT_TOKEN: FAKE_TOKEN, ADMIN_CHAT_ID: "12345" }, { envFile: false }).admin.chatId, 12345);
+  assert.throws(() => loadConfig({ BOT_TOKEN: FAKE_TOKEN, PSY_PRICE_STARS: "20000" }, { envFile: false }), /10000/);
+  assert.throws(() => loadConfig({ BOT_TOKEN: FAKE_TOKEN, ADMIN_CHAT_ID: "abc" }, { envFile: false }), /ADMIN_CHAT_ID/);
 });
 
 // --------------------------------------------------------------- billing
@@ -2343,7 +2784,8 @@ test("telegram: getUpdates sends the offset, the long poll timeout, and the upda
     await client.getUpdates({ offset: 99, timeoutSeconds: 1 });
     assert.equal(body.offset, 99);
     assert.equal(body.timeout, 1);
-    assert.deepEqual(body.allowed_updates, ["message", "callback_query"]);
+    // Without pre_checkout_query no payment could ever be confirmed in time.
+    assert.deepEqual(body.allowed_updates, ["message", "callback_query", "pre_checkout_query"]);
   } finally {
     await closeServer(server);
   }
@@ -2524,6 +2966,7 @@ class FakeClient {
   async call(method, payload) {
     this.calls.push({ method, payload });
     if (this.failWith) throw this.failWith;
+    if (method === "createInvoiceLink") return "https://t.me/$fakeinvoice";
     return {};
   }
   async getUpdates() {

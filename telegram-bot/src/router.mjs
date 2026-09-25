@@ -8,7 +8,8 @@ import { escapeHtml } from "./telegram.mjs";
 import { INSTRUMENT_LIST, buildResult, getInstrument } from "./instruments.mjs";
 import { applyPayment, checkPreCheckout, ensureTrial, entitlement, invoiceFor } from "./billing.mjs";
 import {
-  DAY_MS, formatTimeOfDay, localDateKey, nextDueAfter, parseTimeOfDay, parseUtcOffset, resolveSchedule,
+  DAY_MS, formatLocalDateTime, formatTimeOfDay, localDateKey, nextDueAfter, offsetAt, parseTimeOfDay,
+  parseUtcOffset, resolveSchedule,
 } from "./reminders.mjs";
 import {
   aboutText, answerKeyboard, appIntro, appKeyboard, appRejected, appResultSaved, exportMessage,
@@ -27,6 +28,22 @@ import {
   getPractice, isSosText, practicesFor,
 } from "./selfhelp.mjs";
 import { buildReport } from "./report.mjs";
+import {
+  INVITE_PREFIX, MAX_APPLICATION_FIELD, TERMS_VERSION, activeShare, applySubscriptionPayment,
+  checkSubscriptionPreCheckout, clientsOf, findSpecialistByCode, grantShare, isSubscriptionPayload,
+  newInviteCode, psyState, revokeShare, setShareNotes, subscriptionInvoice,
+} from "./psy.mjs";
+import {
+  adminApplication, adminDecided, adminDecisionKeyboard, adminNoPending, clientDisconnectedByPsy,
+  consentAlready, consentDeclined, consentDone, consentForm, consentInvalid, consentKeyboard,
+  consentNotesKeyboard, consentNotesQuestion, consentOwnLink, inviteLink, notAdmin, notesChanged,
+  privacyKeyboard, privacyMessage, psyAborted, psyActivated, psyAlert, psyApplied, psyApplyKeyboard,
+  psyApproved, psyAskCredentials, psyAskName, psyCanceled, psyClientDeleted, psyClientJoined,
+  psyClientKeyboard, psyClientNotes, psyClientRevoked, psyClientsKeyboard, psyClientsList, psyDashboard,
+  psyDashboardKeyboard, psyDisconnected, psyGone, psyInactive, psyIntro, psyInvoiceKeyboard,
+  psyInvoiceMessage, psyNeedsAccess, psyNewInvite, psyPending, psyRejected, psyRenewed, psyResumed,
+  psySubscribeKeyboard, psyTerms, psyTermsKeyboard, revokeKeyboard, revoked,
+} from "./psytexts.mjs";
 import { parseWebAppPayload } from "./webapp.mjs";
 
 const HTML = { parse_mode: "HTML" };
@@ -203,6 +220,288 @@ export function createRouter(context) {
     return [send(chatId, bookingScoresQuestion(), { reply_markup: bookingScoresKeyboard() })];
   }
 
+  // ---------------------------------------------------------- specialist mode
+
+  // The first chat whose username matches the configured owner is bound for
+  // good. After that only the chat id counts, never the username.
+  function noteAdmin(chatId, from) {
+    if (config.admin && config.admin.chatId) return;
+    if (store.meta.adminChatId !== null) return;
+    const wanted = config.admin && config.admin.username ? config.admin.username.toLowerCase() : "";
+    const username = from && typeof from.username === "string" ? from.username.toLowerCase() : "";
+    if (wanted && username === wanted && Number(chatId) === Number(from.id)) store.setMeta({ adminChatId: Number(chatId) });
+  }
+
+  function isAdmin(chatId) {
+    const pinned = config.admin && config.admin.chatId ? config.admin.chatId : store.meta.adminChatId;
+    return pinned !== null && pinned !== undefined && Number(chatId) === Number(pinned);
+  }
+
+  function dateFor(chatId, ms) {
+    const schedule = scheduleFor(chatId);
+    return formatLocalDateTime(ms, offsetAt(schedule, ms)).split(" ")[0];
+  }
+
+  function stateOf(chatId) {
+    return psyState(store.hasUser(chatId) ? store.user(chatId) : null, now(), isAdmin(chatId));
+  }
+
+  function psyName(psyChatId) {
+    const user = store.hasUser(psyChatId) ? store.user(psyChatId) : null;
+    return user && user.psy && user.psy.name ? user.psy.name : "фахівець";
+  }
+
+  function ensureInvite(chatId) {
+    const user = store.user(chatId);
+    if (user.psy && user.psy.inviteCode) return user.psy.inviteCode;
+    const code = newInviteCode();
+    store.updateUser(chatId, { psy: Object.assign({}, user.psy || { status: "approved" }, { inviteCode: code }) });
+    return code;
+  }
+
+  function subscribeActions(chatId) {
+    return [{
+      method: "createInvoiceLink",
+      payload: subscriptionInvoice(chatId, config.psy),
+      then: (link) => (typeof link === "string" && link
+        ? [send(chatId, psyInvoiceMessage(), { reply_markup: psyInvoiceKeyboard(link, config.psy) })]
+        : []),
+    }];
+  }
+
+  // What /psy shows depends on where the specialist stands.
+  function psyHome(chatId) {
+    const user = store.hasUser(chatId) ? store.user(chatId) : null;
+    const state = stateOf(chatId);
+    if (state.active) {
+      if (!user || !user.psy) {
+        // The owner without a profile yet: the name clients will see is needed first.
+        return [send(chatId, psyIntro(config.psy), { reply_markup: psyApplyKeyboard() })];
+      }
+      const link = inviteLink(config.botUsername, ensureInvite(chatId));
+      const until = state.expiresAt ? dateFor(chatId, state.expiresAt) : "";
+      return [send(chatId, psyDashboard(state, link, clientsOf(store, chatId).length, until),
+        { reply_markup: psyDashboardKeyboard(state) })];
+    }
+    if (state.kind === "none") return [send(chatId, psyIntro(config.psy), { reply_markup: psyApplyKeyboard() })];
+    if (state.kind === "pending") return [send(chatId, psyPending())];
+    if (state.kind === "rejected") return [send(chatId, psyRejected())];
+    const expiredOn = state.expiresAt ? dateFor(chatId, state.expiresAt) : "";
+    return [send(chatId, psyInactive(state, config.psy, expiredOn), { reply_markup: psySubscribeKeyboard(config.psy) })];
+  }
+
+  function requireActive(chatId) {
+    return stateOf(chatId).active && store.hasUser(chatId) && store.user(chatId).psy ? null : [send(chatId, psyNeedsAccess())];
+  }
+
+  function applicationText(chatId, application, text) {
+    const value = text.trim().replace(/\s+/g, " ").slice(0, MAX_APPLICATION_FIELD);
+    if (!value) return [];
+    if (application.step === "name") {
+      sessions.updateApplication(chatId, { name: value.slice(0, 120), step: "credentials" }, now());
+      return [send(chatId, psyAskCredentials())];
+    }
+    if (application.step === "credentials") {
+      sessions.updateApplication(chatId, { credentials: value, step: "terms" }, now());
+      return [send(chatId, psyTerms(), { reply_markup: psyTermsKeyboard() })];
+    }
+    return [];
+  }
+
+  // The application is stored and sent to the owner. The owner's own is
+  // approved on the spot.
+  function submitApplication(chatId, application, from) {
+    sessions.clearApplication(chatId);
+    const user = store.user(chatId);
+    const admin = isAdmin(chatId);
+    const profile = Object.assign({}, user.psy || {}, {
+      status: admin ? "approved" : "pending",
+      name: application.name,
+      credentials: application.credentials,
+      username: from && from.username ? String(from.username) : "",
+      appliedAt: new Date(now()).toISOString(),
+      decidedAt: admin ? new Date(now()).toISOString() : null,
+      termsVersion: TERMS_VERSION,
+    });
+    store.updateUser(chatId, { psy: profile });
+    if (admin) return psyHome(chatId);
+    const actions = [send(chatId, psyApplied())];
+    const adminChat = config.admin && config.admin.chatId ? config.admin.chatId : store.meta.adminChatId;
+    if (adminChat !== null && adminChat !== undefined) {
+      actions.push(send(adminChat, adminApplication(store.user(chatId)), { reply_markup: adminDecisionKeyboard(chatId) }));
+    }
+    return actions;
+  }
+
+  function adminList(chatId) {
+    if (!isAdmin(chatId)) return [send(chatId, notAdmin())];
+    const users = store.allUsers();
+    const pending = users.filter((user) => user.psy && user.psy.status === "pending");
+    const approved = users.filter((user) => user.psy && user.psy.status === "approved").length;
+    if (!pending.length) return [send(chatId, adminNoPending(approved))];
+    return pending.map((user) => send(chatId, adminApplication(user), { reply_markup: adminDecisionKeyboard(user.chatId) }));
+  }
+
+  function decide(chatId, targetId, approve) {
+    if (!isAdmin(chatId)) return [send(chatId, notAdmin())];
+    if (!store.hasUser(targetId) || !store.user(targetId).psy) return [];
+    const user = store.user(targetId);
+    store.updateUser(targetId, { psy: Object.assign({}, user.psy, {
+      status: approve ? "approved" : "rejected",
+      decidedAt: new Date(now()).toISOString(),
+    }) });
+    const notice = approve
+      ? send(targetId, psyApproved(config.psy), { reply_markup: psySubscribeKeyboard(config.psy) })
+      : send(targetId, psyRejected());
+    return [send(chatId, adminDecided(user.psy.name, approve)), notice];
+  }
+
+  function scaleLine(clientChatId, instrument) {
+    const entries = store.history(clientChatId, instrument.id, 2);
+    if (!entries.length) return null;
+    const last = entries[0];
+    const delta = entries[1] ? last.score - entries[1].score : null;
+    const change = delta === null || delta === 0 ? "" : " (" + (delta > 0 ? "+" : "") + delta + ")";
+    return instrument.title + " " + last.score + "/" + instrument.maxScore + change;
+  }
+
+  function flagged(clientChatId) {
+    const since = now() - 30 * DAY_MS;
+    return store.history(clientChatId, null, 20).some((entry) =>
+      Date.parse(entry.completedAt) >= since && (entry.risk || entry.aboveCutoff));
+  }
+
+  function moodAverage(clientChatId) {
+    const since = localDateKey(scheduleFor(clientChatId), now() - 6 * DAY_MS);
+    const recent = store.moods(clientChatId).filter((entry) => entry.date >= since);
+    return recent.length ? recent.reduce((sum, entry) => sum + entry.rating, 0) / recent.length : null;
+  }
+
+  function clientsActions(chatId) {
+    const denied = requireActive(chatId);
+    if (denied) return denied;
+    const entries = clientsOf(store, chatId);
+    const rows = entries.map((entry) => {
+      const parts = INSTRUMENT_LIST.map((instrument) => scaleLine(entry.user.chatId, instrument)).filter(Boolean);
+      const mood = moodAverage(entry.user.chatId);
+      if (mood !== null) parts.push("настрій " + mood.toFixed(1).replace(".", ","));
+      return (flagged(entry.user.chatId) ? "⚠️ " : "") + (entry.share.clientName || "Клієнт") + ", з " +
+        dateFor(chatId, Date.parse(entry.share.grantedAt)) + (parts.length ? ": " + parts.join(", ") : ": ще немає результатів");
+    });
+    const buttons = entries.map((entry) => ({ chatId: entry.user.chatId, label: entry.share.clientName || "Клієнт" }));
+    return [send(chatId, psyClientsList(rows), entries.length ? { reply_markup: psyClientsKeyboard(buttons) } : {})];
+  }
+
+  function clientCard(chatId, clientChatId) {
+    const denied = requireActive(chatId);
+    if (denied) return denied;
+    const client = store.hasUser(clientChatId) ? store.user(clientChatId) : null;
+    const share = activeShare(client, chatId);
+    if (!share) return [send(chatId, "Цей клієнт не надав згоди або відкликав її.")];
+    const lines = ["<b>" + escapeHtml(share.clientName || "Клієнт") + "</b>",
+      "Згода з " + dateFor(chatId, Date.parse(share.grantedAt)) + ", нотатки: " + (share.notes ? "дозволено" : "приховані"), ""];
+    INSTRUMENT_LIST.forEach((instrument) => {
+      const entries = store.history(clientChatId, instrument.id, 2);
+      if (!entries.length) return;
+      const last = entries[0];
+      const previous = entries[1] ? ", попередній " + entries[1].score : "";
+      lines.push("<b>" + escapeHtml(instrument.title) + "</b>: " + last.score + " з " + instrument.maxScore + ", " +
+        escapeHtml(last.severity) + " (" + dateFor(chatId, Date.parse(last.completedAt)) + previous + ")");
+    });
+    const risky = store.history(clientChatId, "phq9", 10).filter((entry) => entry.risk);
+    if (risky.length) {
+      lines.push("⚠️ PHQ-9, питання 9 позначено: " +
+        risky.slice(0, 3).map((entry) => dateFor(chatId, Date.parse(entry.completedAt))).join(", "));
+    }
+    const mood = moodAverage(clientChatId);
+    if (mood !== null) lines.push("Настрій: середнє за 7 днів " + mood.toFixed(1).replace(".", ","));
+    if (lines.length === 3) lines.push("Ще немає результатів.");
+    if (share.notes) {
+      const notes = store.history(clientChatId, null, 10).filter((entry) => entry.note).slice(0, 3);
+      if (notes.length) {
+        lines.push("", "<b>Нотатки</b>");
+        notes.forEach((entry) => lines.push(dateFor(chatId, Date.parse(entry.completedAt)) + ": <i>" +
+          escapeHtml(entry.note.length > 300 ? entry.note.slice(0, 300) + "..." : entry.note) + "</i>"));
+      }
+    }
+    return [send(chatId, lines.join("\n"), { reply_markup: psyClientKeyboard(clientChatId) })];
+  }
+
+  function clientReport(chatId, clientChatId) {
+    const denied = requireActive(chatId);
+    if (denied) return denied;
+    const client = store.hasUser(clientChatId) ? store.user(clientChatId) : null;
+    const share = activeShare(client, chatId);
+    if (!share) return [send(chatId, "Цей клієнт не надав згоди або відкликав її.")];
+    const html = buildReport(client, { schedule: scheduleFor(chatId), includeNotes: share.notes, nowMs: now() });
+    if (!html) return [send(chatId, "У клієнта ще немає даних для звіту.")];
+    return [{
+      method: "sendDocument",
+      payload: {
+        chat_id: chatId,
+        caption: "Звіт клієнта: " + (share.clientName || "без імені"),
+        document: {
+          filename: "client-report-" + localDateKey(scheduleFor(chatId), now()) + ".html",
+          contentType: "text/html; charset=utf-8",
+          content: html,
+        },
+      },
+    }];
+  }
+
+  // Alerts only while the specialist's cabinet is active; the client always
+  // has the crisis block regardless.
+  function alertActions(clientChatId, instrument, result) {
+    if (!result.aboveCutoff && !result.risk) return [];
+    const client = store.hasUser(clientChatId) ? store.user(clientChatId) : null;
+    if (!client) return [];
+    return client.shares.filter((share) => !share.revokedAt && stateOf(share.psy).active).map((share) => {
+      const lines = [instrument.title + ": " + result.score + " з " + instrument.maxScore + ", " + result.severity + "."];
+      if (result.risk) lines.push("Позначено питання 9 PHQ-9: думки про смерть або про те, щоб завдати собі шкоди.");
+      return send(share.psy, psyAlert(share.clientName, lines), {
+        reply_markup: { inline_keyboard: [[{ text: "Картка клієнта", callback_data: "cl|" + clientChatId }]] },
+      });
+    });
+  }
+
+  function consentStart(chatId, code) {
+    const psyUser = findSpecialistByCode(store, code);
+    const approved = psyUser && (psyUser.psy.status === "approved" || isAdmin(psyUser.chatId));
+    if (!approved) return [send(chatId, consentInvalid())];
+    if (psyUser.chatId === Number(chatId)) return [send(chatId, consentOwnLink())];
+    if (activeShare(store.hasUser(chatId) ? store.user(chatId) : null, psyUser.chatId)) {
+      return [send(chatId, consentAlready(psyUser.psy.name))];
+    }
+    return [send(chatId, consentForm(psyUser.psy.name), { reply_markup: consentKeyboard(code) })];
+  }
+
+  function privacyActions(chatId) {
+    const user = store.hasUser(chatId) ? store.user(chatId) : null;
+    const shares = user ? user.shares.filter((share) => !share.revokedAt) : [];
+    const rows = shares.map((share) => psyName(share.psy) + ": з " + dateFor(chatId, Date.parse(share.grantedAt)) +
+      ", нотатки " + (share.notes ? "видно" : "приховані"));
+    const keyboard = privacyKeyboard(shares.map((share) => ({ psy: share.psy, name: psyName(share.psy), notes: share.notes })));
+    return [send(chatId, privacyMessage(rows), keyboard ? { reply_markup: keyboard } : {})];
+  }
+
+  // Before /delete wipes a person: tell the specialists who saw their data,
+  // and if the person is a specialist, close every client's consent to them.
+  function forgetActions(chatId) {
+    const actions = [];
+    const user = store.hasUser(chatId) ? store.user(chatId) : null;
+    if (!user) return actions;
+    user.shares.filter((share) => !share.revokedAt).forEach((share) => {
+      actions.push(send(share.psy, psyClientDeleted(share.clientName)));
+    });
+    if (user.psy) {
+      clientsOf(store, chatId).forEach((entry) => {
+        revokeShare(store, entry.user.chatId, chatId, "psy", now());
+        actions.push(send(entry.user.chatId, psyGone(user.psy.name || "фахівець")));
+      });
+    }
+    return actions;
+  }
+
   function locked(chatId, state) {
     return [send(chatId, paywall(config.price, state), { reply_markup: buyKeyboard(config.price) })];
   }
@@ -251,7 +550,7 @@ export function createRouter(context) {
       }),
     ].concat(needsHelp ? helpActions(chatId) : [], [
       send(chatId, noteQuestion(), { reply_markup: noteKeyboard(pending.id) }),
-    ]);
+    ], alertActions(chatId, instrument, result));
   }
 
   function acceptNote(chatId, text) {
@@ -342,6 +641,11 @@ export function createRouter(context) {
     }
     switch (command) {
       case "start": {
+        if (args.indexOf(INVITE_PREFIX) === 0) {
+          if (!store.user(chatId).firstSeenAt) store.updateUser(chatId, { firstSeenAt: new Date(now()).toISOString() });
+          startTrialFor(chatId);
+          return consentStart(chatId, args.slice(INVITE_PREFIX.length));
+        }
         if (!store.user(chatId).firstSeenAt) {
           store.updateUser(chatId, { firstSeenAt: new Date(now()).toISOString() });
         }
@@ -390,6 +694,24 @@ export function createRouter(context) {
         return reportAsk(chatId);
       case "book":
         return bookingStart(chatId);
+      case "psy":
+        return psyHome(chatId);
+      case "invite": {
+        const denied = requireActive(chatId);
+        if (denied) return denied;
+        if (/^(new|нове)$/i.test(args)) {
+          const user = store.user(chatId);
+          store.updateUser(chatId, { psy: Object.assign({}, user.psy, { inviteCode: newInviteCode() }) });
+          return [send(chatId, psyNewInvite(inviteLink(config.botUsername, user.psy.inviteCode)))];
+        }
+        return psyHome(chatId);
+      }
+      case "clients":
+        return clientsActions(chatId);
+      case "privacy":
+        return privacyActions(chatId);
+      case "admin":
+        return adminList(chatId);
       case "cancel": {
         const hadSession = sessions.cancel(chatId);
         const hadNote = sessions.clearNote(chatId);
@@ -432,6 +754,8 @@ export function createRouter(context) {
           tzOffsetMinutes: user.tzOffsetMinutes,
           results: user.results,
           moods: user.moods,
+          shares: user.shares,
+          psy: user.psy,
         }))];
       }
       case "delete":
@@ -477,7 +801,7 @@ export function createRouter(context) {
           send(chatId, resultMessage(instrument, result, previous, schedule, config.crisisContact), {
             reply_markup: resultKeyboard(instrument),
           }),
-        ].concat(result.aboveCutoff || result.risk ? helpActions(chatId) : []),
+        ].concat(result.aboveCutoff || result.risk ? helpActions(chatId) : [], alertActions(chatId, instrument, result)),
         payload,
       };
     }
@@ -537,7 +861,9 @@ export function createRouter(context) {
   // so it does no work beyond checking that the invoice is ours.
   function handlePreCheckout(query) {
     const chatId = query && query.from ? query.from.id : null;
-    const verdict = checkPreCheckout(query, chatId);
+    const verdict = query && isSubscriptionPayload(query.invoice_payload)
+      ? checkSubscriptionPreCheckout(query, chatId, store.hasUser(chatId) ? store.user(chatId) : null)
+      : checkPreCheckout(query, chatId);
     if (verdict.ok) {
       return [{ method: "answerPreCheckoutQuery", payload: { pre_checkout_query_id: query.id, ok: true } }];
     }
@@ -552,6 +878,14 @@ export function createRouter(context) {
   }
 
   function handleSuccessfulPayment(chatId, payment) {
+    if (payment && isSubscriptionPayload(payment.invoice_payload)) {
+      const hadOne = Boolean(store.hasUser(chatId) && store.user(chatId).psy && store.user(chatId).psy.subscription);
+      const subscription = applySubscriptionPayment(store, chatId, payment, now());
+      if (!subscription) return [send(chatId, "Платіж отримано, але я не зміг його прочитати. Напишіть у /paysupport.")];
+      const until = dateFor(chatId, subscription.expiresAt);
+      const renewal = hadOne && payment.is_first_recurring !== true;
+      return [send(chatId, renewal ? psyRenewed(until) : psyActivated(until))];
+    }
     const record = applyPayment(store, chatId, payment, now());
     if (!record) return [send(chatId, "Платіж отримано, але я не зміг його прочитати. Напишіть у /paysupport.")];
     const state = access(chatId);
@@ -569,10 +903,13 @@ export function createRouter(context) {
     if (chat.type && chat.type !== "private") {
       return parsed ? [send(chatId, PRIVATE_ONLY)] : [];
     }
+    noteAdmin(chatId, message.from);
     if (message.successful_payment) return handleSuccessfulPayment(chatId, message.successful_payment);
     if (message.web_app_data) return handleWebAppData(chatId, message.web_app_data.data).actions;
     if (isSosText(text)) return sosActions(chatId);
     if (parsed) return handleCommand(chatId, parsed, message);
+    const application = sessions.application(chatId, now());
+    if (application) return applicationText(chatId, application, text);
     const booking = sessions.booking(chatId, now());
     if (booking && booking.step === "request") {
       const request = text.trim().replace(/\s+/g, " ").slice(0, MAX_BOOKING_REQUEST);
@@ -603,6 +940,7 @@ export function createRouter(context) {
     const data = typeof query.data === "string" ? query.data : "";
     if (chatId === undefined || chatId === null) return [ack(query.id)];
     if (chat.type && chat.type !== "private") return [ack(query.id), send(chatId, PRIVATE_ONLY)];
+    noteAdmin(chatId, query.from);
 
     const answer = parseAnswerCallback(data);
     if (answer) {
@@ -682,6 +1020,92 @@ export function createRouter(context) {
       if (parts[1] === "ask") return [ack(query.id)].concat(reportAsk(chatId));
       return [ack(query.id, "Готую звіт")].concat(reportActions(chatId, parts[1] === "notes"));
     }
+    if (parts[0] === "py") {
+      if (parts[1] === "apply") {
+        sessions.startApplication(chatId, now());
+        return [ack(query.id), send(chatId, psyAskName())];
+      }
+      if (parts[1] === "terms") {
+        const application = sessions.application(chatId, now());
+        if (!application || application.step !== "terms") return [ack(query.id), send(chatId, psyAborted())];
+        return [ack(query.id)].concat(submitApplication(chatId, application, query.from));
+      }
+      if (parts[1] === "abort") {
+        sessions.clearApplication(chatId);
+        return [ack(query.id), send(chatId, psyAborted())];
+      }
+      if (parts[1] === "sub") {
+        const user = store.hasUser(chatId) ? store.user(chatId) : null;
+        if (!user || !user.psy || user.psy.status !== "approved") return [ack(query.id)].concat(psyHome(chatId));
+        return [ack(query.id)].concat(subscribeActions(chatId));
+      }
+      if (parts[1] === "clients") return [ack(query.id)].concat(clientsActions(chatId));
+      if (parts[1] === "newinv") return [ack(query.id)].concat(handleCommand(chatId, { command: "invite", args: "new" }));
+      if (parts[1] === "cancel" || parts[1] === "resume") {
+        const user = store.hasUser(chatId) ? store.user(chatId) : null;
+        const sub = user && user.psy ? user.psy.subscription : null;
+        if (!sub || sub.expiresAt <= now()) return [ack(query.id)].concat(psyHome(chatId));
+        const canceled = parts[1] === "cancel";
+        const until = dateFor(chatId, sub.expiresAt);
+        return [ack(query.id), {
+          method: "editUserStarSubscription",
+          payload: { user_id: chatId, telegram_payment_charge_id: sub.firstChargeId, is_canceled: canceled },
+          then: () => {
+            store.updateUser(chatId, { psy: Object.assign({}, user.psy, {
+              subscription: Object.assign({}, sub, { canceled }),
+            }) });
+            return [send(chatId, canceled ? psyCanceled(until) : psyResumed(until))];
+          },
+        }];
+      }
+      return [ack(query.id)];
+    }
+    if (parts[0] === "ap" || parts[0] === "rj") {
+      return [ack(query.id)].concat(decide(chatId, Number(parts[1]), parts[0] === "ap"));
+    }
+    if (parts[0] === "cs") {
+      const code = parts[2];
+      if (parts[1] !== "yes") return [ack(query.id), send(chatId, consentDeclined())];
+      const psyUser = findSpecialistByCode(store, code);
+      const approved = psyUser && (psyUser.psy.status === "approved" || isAdmin(psyUser.chatId));
+      if (!approved || psyUser.chatId === Number(chatId)) return [ack(query.id), send(chatId, consentInvalid())];
+      const from = query.from || {};
+      const clientName = [from.first_name, from.last_name].filter(Boolean).join(" ");
+      grantShare(store, chatId, psyUser.chatId, clientName, now());
+      return [ack(query.id, "Згоду надано"),
+        send(chatId, consentNotesQuestion(), { reply_markup: consentNotesKeyboard(psyUser.chatId) }),
+        send(psyUser.chatId, psyClientJoined(clientName))];
+    }
+    if (parts[0] === "cn" || parts[0] === "rn") {
+      const psyChatId = Number(parts[1]);
+      const notes = parts[2] === "1";
+      const share = setShareNotes(store, chatId, psyChatId, notes);
+      if (!share) return [ack(query.id)];
+      const reply = parts[0] === "cn"
+        ? send(chatId, consentDone(psyName(psyChatId), notes), { reply_markup: revokeKeyboard(psyChatId) })
+        : send(chatId, notesChanged(psyName(psyChatId), notes));
+      const extra = parts[0] === "rn" || notes ? [send(psyChatId, psyClientNotes(share.clientName, notes))] : [];
+      // Someone who arrived through an invite has not seen the greeting yet,
+      // nor the keyboard that keeps "Мені зараз погано" in reach.
+      const welcome = parts[0] === "cn" ? handleCommand(chatId, { command: "start", args: "" }, { from: query.from }) : [];
+      return [ack(query.id), reply].concat(extra, welcome);
+    }
+    if (parts[0] === "rv") {
+      const psyChatId = Number(parts[1]);
+      const share = revokeShare(store, chatId, psyChatId, "client", now());
+      if (!share) return [ack(query.id), send(chatId, "Цю згоду вже відкликано.")];
+      return [ack(query.id, "Згоду відкликано"), send(chatId, revoked(psyName(psyChatId))),
+        send(psyChatId, psyClientRevoked(share.clientName))];
+    }
+    if (parts[0] === "cl") return [ack(query.id)].concat(clientCard(chatId, Number(parts[1])));
+    if (parts[0] === "clr") return [ack(query.id, "Готую звіт")].concat(clientReport(chatId, Number(parts[1])));
+    if (parts[0] === "cld") {
+      const clientChatId = Number(parts[1]);
+      const share = revokeShare(store, clientChatId, chatId, "psy", now());
+      if (!share) return [ack(query.id)];
+      return [ack(query.id), send(chatId, psyDisconnected(share.clientName)),
+        send(clientChatId, clientDisconnectedByPsy(psyName(chatId)))];
+    }
     if (parts[0] === "b") {
       if (parts[1] === "start") return [ack(query.id)].concat(bookingStart(chatId));
       const booking = sessions.booking(chatId, now());
@@ -715,8 +1139,11 @@ export function createRouter(context) {
       if (parts[1] === "yes") {
         sessions.cancel(chatId);
         sessions.clearNote(chatId);
+        sessions.clearBooking(chatId);
+        sessions.clearApplication(chatId);
+        const notices = forgetActions(chatId);
         store.forget(chatId);
-        return [ack(query.id, "Видалено"), send(chatId, "Усі дані видалено. /start починає заново.")];
+        return [ack(query.id, "Видалено"), send(chatId, "Усі дані видалено. /start починає заново.")].concat(notices);
       }
       return [ack(query.id), send(chatId, "Видалення скасовано.")];
     }

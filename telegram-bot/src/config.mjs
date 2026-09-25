@@ -116,6 +116,23 @@ export function loadConfig(env = process.env, options = {}) {
     throw new Error("CONTACT_USERNAME must be a Telegram username: 4 to 32 letters, digits or underscores");
   }
 
+  // The owner approves specialists. ADMIN_CHAT_ID pins the role to one chat;
+  // otherwise the first chat whose username matches ADMIN_USERNAME, which
+  // defaults to the contact, is bound for good, so a later change of username
+  // cannot hand the role to whoever takes it next.
+  const adminUsername = String(
+    env.ADMIN_USERNAME === undefined ? contactUsername : env.ADMIN_USERNAME,
+  ).trim().replace(/^@/, "");
+  if (adminUsername && !/^[A-Za-z0-9_]{4,32}$/.test(adminUsername)) {
+    throw new Error("ADMIN_USERNAME must be a Telegram username: 4 to 32 letters, digits or underscores");
+  }
+  const rawAdminId = String(env.ADMIN_CHAT_ID || "").trim();
+  if (rawAdminId && !/^\d{1,20}$/.test(rawAdminId)) {
+    throw new Error("ADMIN_CHAT_ID must be a numeric Telegram user id");
+  }
+  const psyStars = positiveInteger(env.PSY_PRICE_STARS, 177, "PSY_PRICE_STARS");
+  if (psyStars > 10000) throw new Error("PSY_PRICE_STARS must be at most 10000, Telegram's cap for a subscription");
+
   const memoryOnly = /^(1|true|yes)$/i.test(String(env.MEMORY_ONLY || ""));
   const dataFile = memoryOnly
     ? null
@@ -150,6 +167,17 @@ export function loadConfig(env = process.env, options = {}) {
       description: String(env.PRICE_DESCRIPTION ||
         "Шкали сну і стресу, повна історія та статистика. Одноразово, без підписки."),
     },
+    admin: { username: adminUsername, chatId: rawAdminId ? Number(rawAdminId) : null },
+    // The monthly subscription for specialists. 177 Stars is roughly 177 UAH
+    // for the buyer, the same convention as the one-time price.
+    psy: {
+      stars: psyStars,
+      title: String(env.PSY_PRICE_TITLE || "Кабінет фахівця"),
+      description: String(env.PSY_PRICE_DESCRIPTION ||
+        "Клієнти, їхня динаміка між зустрічами і сповіщення про ризик. Щомісячна підписка."),
+    },
+    // Learned from getMe at start, for invite links.
+    botUsername: null,
     reminder: {
       time,
       weekday,
