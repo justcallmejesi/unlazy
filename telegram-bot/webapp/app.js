@@ -11,6 +11,10 @@
 // but static hosting.
 
 import { INSTRUMENTS, INSTRUMENT_LIST, buildResult, interpretResult, severityOf } from "./instruments.mjs";
+import {
+  BOOKING_FORMATS, BOOKING_TIMES, MOOD_MAX, MOOD_MIN, MOOD_TAGS, PRACTICE_IDS, PRACTICES, SOS_EMERGENCY,
+  SOS_INTRO, SOS_STEPS, SOS_TITLE, practicesFor,
+} from "./selfhelp.mjs";
 
 // One hue per scale. On a light surface the four clear every check; on the
 // dark surface the navy and the light blue sit closer than the separation
@@ -20,6 +24,7 @@ import { INSTRUMENTS, INSTRUMENT_LIST, buildResult, interpretResult, severityOf 
 const seriesColor = (instrument) => "var(--series-" + instrument.id + ")";
 const MAX_NOTE_LENGTH = 1000;
 const RESULT_PREFIX = "r_";
+const MOOD_PREFIX = "m_";
 const SETTINGS_KEY = "s_settings";
 const PAYLOAD_VERSION = 1;
 
@@ -29,7 +34,13 @@ const $ = (id) => document.getElementById(id);
 // The bot puts ?pro=1 or ?pro=0 in the launch URL. It is only a hint for what
 // to show: the bot itself refuses to store a locked result, so editing this
 // changes nothing but the labels.
-const UNLOCKED = new URLSearchParams(window.location.search).get("pro") !== "0";
+const PARAMS = new URLSearchParams(window.location.search);
+const UNLOCKED = PARAMS.get("pro") !== "0";
+// The public contact for "Мені зараз погано" and booking, when the bot has one.
+// Checked against Telegram's username rules before it goes into a link.
+const CONTACT = /^[A-Za-z0-9_]{4,32}$/.test(PARAMS.get("c") || "")
+  ? { username: PARAMS.get("c"), name: (PARAMS.get("cn") || "").slice(0, 64) }
+  : null;
 
 // ----------------------------------------------------------------- platform
 
@@ -170,6 +181,37 @@ async function loadResults() {
     .sort((left, right) => left.at - right.at);
 }
 
+function decodeMood(raw) {
+  if (typeof raw !== "string" || !raw) return null;
+  let parsed = null;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    return null;
+  }
+  if (!parsed || typeof parsed.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(parsed.date)) return null;
+  if (!Number.isInteger(parsed.rating) || parsed.rating < MOOD_MIN || parsed.rating > MOOD_MAX) return null;
+  const tags = Array.isArray(parsed.tags) ? parsed.tags.filter((id) => MOOD_TAGS.some((tag) => tag.id === id)) : [];
+  return { date: parsed.date, rating: parsed.rating, tags, at: Date.parse(parsed.date + "T12:00:00") };
+}
+
+async function loadMoods() {
+  const keys = (await storageKeys()).filter((key) => key.indexOf(MOOD_PREFIX) === 0);
+  const values = await storageGetMany(keys);
+  return Object.keys(values).map((key) => decodeMood(values[key])).filter(Boolean)
+    .sort((left, right) => (left.date < right.date ? -1 : 1));
+}
+
+function saveMoodLocally(mood) {
+  return storageSet(MOOD_PREFIX + mood.date, JSON.stringify({ date: mood.date, rating: mood.rating, tags: mood.tags }));
+}
+
+function todayKey() {
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  return now.getFullYear() + "-" + pad(now.getMonth() + 1) + "-" + pad(now.getDate());
+}
+
 async function loadSettings() {
   const values = await storageGetMany([SETTINGS_KEY]);
   try {
@@ -195,8 +237,8 @@ function saveResultLocally(result) {
 // ----------------------------------------------------------------- state
 
 const state = {
-  screen: "home", instrument: null, answers: [], index: 0, note: "", result: null, results: [],
-  unlocked: UNLOCKED,
+  screen: "home", instrument: null, answers: [], index: 0, note: "", result: null, results: [], moods: [],
+  unlocked: UNLOCKED, mood: { rating: null, tags: [] },
 };
 
 function show(name) {
@@ -226,9 +268,10 @@ function minutesFor(instrument) {
 function renderHome() {
   const menu = $("home-menu");
   Array.prototype.slice.call(menu.querySelectorAll("[data-instrument]")).forEach((node) => node.remove());
-  // Built back to front and inserted at the top, so the scales stay above the
-  // fixed cards in the order instruments.mjs declares them.
-  INSTRUMENT_LIST.slice().reverse().forEach((instrument) => {
+  // Inserted before the anchor in declared order: under "Мені зараз погано",
+  // above the fixed cards.
+  const anchor = $("scale-anchor");
+  INSTRUMENT_LIST.forEach((instrument) => {
     const locked = Boolean(instrument.paid) && !state.unlocked;
     const button = document.createElement("button");
     button.className = "menu-item" + (locked ? " locked" : "");
@@ -258,8 +301,130 @@ function renderHome() {
       }
       startQuiz(instrument.id);
     });
-    menu.insertBefore(button, menu.firstElementChild);
+    menu.insertBefore(button, anchor);
   });
+  const moodCard = $("mood-card");
+  moodCard.classList.toggle("locked", !state.unlocked);
+  $("mood-tail").className = state.unlocked ? "chev" : "lock";
+  $("mood-tail").textContent = state.unlocked ? "›" : "🔒";
+  $("booking-card").hidden = !CONTACT;
+}
+
+// ----------------------------------------------------------------- self-help
+
+function practiceNode(practice, open) {
+  const box = document.createElement("details");
+  box.className = "practice";
+  if (open) box.open = true;
+  const summary = document.createElement("summary");
+  summary.textContent = practice.title;
+  const list = document.createElement("ol");
+  list.className = "steps";
+  practice.steps.forEach((step) => {
+    const item = document.createElement("li");
+    item.textContent = step;
+    list.appendChild(item);
+  });
+  box.appendChild(summary);
+  box.appendChild(list);
+  return box;
+}
+
+function renderPractices() {
+  const list = $("practices-list");
+  list.textContent = "";
+  PRACTICE_IDS.forEach((id) => list.appendChild(practiceNode(PRACTICES[id], false)));
+}
+
+function renderSos() {
+  $("sos-title").textContent = SOS_TITLE;
+  $("sos-intro").textContent = SOS_INTRO;
+  $("sos-emergency").textContent = SOS_EMERGENCY;
+  const steps = $("sos-steps");
+  steps.textContent = "";
+  SOS_STEPS.forEach((step, index) => {
+    const block = document.createElement("p");
+    block.className = "sos-step";
+    const head = document.createElement("b");
+    head.textContent = (index + 1) + ". " + step.title;
+    block.appendChild(head);
+    block.appendChild(document.createTextNode(step.text));
+    steps.appendChild(block);
+  });
+  const button = $("sos-contact");
+  button.hidden = !CONTACT;
+  if (CONTACT) button.textContent = CONTACT.name ? "Написати фахівцю: " + CONTACT.name : "Написати @" + CONTACT.username;
+}
+
+function openContact() {
+  if (!CONTACT) return;
+  const url = "https://t.me/" + CONTACT.username;
+  if (tg && typeof tg.openTelegramLink === "function") tg.openTelegramLink(url);
+  else window.open(url, "_blank", "noopener");
+}
+
+// ----------------------------------------------------------------- mood
+
+function renderMood() {
+  if (!state.unlocked) {
+    window.alert("Відмітка настрою входить у повний доступ. Відкрийте його в чаті командою /buy.");
+    show("home");
+    return;
+  }
+  state.mood = { rating: null, tags: [] };
+  const grid = $("mood-grid");
+  grid.textContent = "";
+  for (let value = MOOD_MIN; value <= MOOD_MAX; value++) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = String(value);
+    button.setAttribute("aria-pressed", "false");
+    button.addEventListener("click", () => {
+      haptic("light");
+      state.mood.rating = value;
+      Array.prototype.forEach.call(grid.children, (node) => {
+        node.setAttribute("aria-pressed", node === button ? "true" : "false");
+      });
+      $("mood-save").disabled = false;
+    });
+    grid.appendChild(button);
+  }
+  const chips = $("mood-tags");
+  chips.textContent = "";
+  MOOD_TAGS.forEach((tag) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "chip";
+    chip.textContent = tag.label;
+    chip.setAttribute("aria-pressed", "false");
+    chip.addEventListener("click", () => {
+      const at = state.mood.tags.indexOf(tag.id);
+      if (at === -1) state.mood.tags.push(tag.id);
+      else state.mood.tags.splice(at, 1);
+      chip.setAttribute("aria-pressed", at === -1 ? "true" : "false");
+    });
+    chips.appendChild(chip);
+  });
+  $("mood-save").disabled = true;
+}
+
+// ----------------------------------------------------------------- booking
+
+function fillOptions(select, options) {
+  select.textContent = "";
+  options.forEach((option) => {
+    const node = document.createElement("option");
+    node.value = option.id;
+    node.textContent = option.label;
+    select.appendChild(node);
+  });
+}
+
+function renderBooking() {
+  fillOptions($("book-format"), BOOKING_FORMATS);
+  fillOptions($("book-time"), BOOKING_TIMES);
+  $("book-request").value = "";
+  $("book-scores").checked = false;
 }
 
 // ----------------------------------------------------------------- quiz
@@ -323,7 +488,8 @@ async function finish() {
   state.result = result;
 
   const previous = state.results.filter((entry) => entry.instrument === instrument.id).pop();
-  $("result-title").textContent = instrument.title + " готовий";
+  // "Сон готовий" but "Самопочуття готове": a colon avoids agreeing with the name.
+  $("result-title").textContent = instrument.title + ": готово";
   $("result-score").textContent = String(result.score);
   $("result-max").textContent = " / " + instrument.maxScore;
   $("result-band").textContent = "Оцінка: " + result.severity;
@@ -354,6 +520,10 @@ async function finish() {
     crisis.appendChild(link);
   }
 
+  const practices = $("result-practices");
+  practices.textContent = "";
+  practicesFor(instrument.id).forEach((practice, index) => practices.appendChild(practiceNode(practice, index === 0)));
+
   // The bot's own scales say what they are not, on every result.
   const caveat = $("result-caveat");
   caveat.hidden = !instrument.caveat;
@@ -367,21 +537,34 @@ async function finish() {
 // ----------------------------------------------------------------- charts
 
 // One chart per instrument: GAD-7 tops out at 21 and PHQ-9 at 27, so a shared
-// axis would misrepresent both. Small multiples keep one scale per plot.
-function renderChart(container, instrument, entries) {
+// axis would misrepresent both. Small multiples keep one scale per plot. The
+// mood check-in is one more series with its own 1 to 10 axis and no threshold.
+function seriesOf(instrument) {
+  return {
+    title: instrument.title, subtitle: instrument.subtitle, min: 0, max: instrument.maxScore,
+    cutoff: instrument.cutoff, color: seriesColor(instrument),
+  };
+}
+
+const MOOD_SERIES = {
+  title: "Настрій", subtitle: "щоденна відмітка", min: MOOD_MIN, max: MOOD_MAX, cutoff: null,
+  color: "var(--series-mood)",
+};
+
+function renderChart(container, series, entries) {
   container.textContent = "";
   const figure = document.createElement("figure");
   const caption = document.createElement("figcaption");
   const swatch = document.createElement("span");
   swatch.className = "swatch";
-  swatch.style.background = seriesColor(instrument);
+  swatch.style.background = series.color;
   caption.appendChild(swatch);
   const name = document.createElement("span");
   name.className = "name";
-  name.textContent = instrument.title;
+  name.textContent = series.title;
   const scale = document.createElement("span");
   scale.className = "scale";
-  scale.textContent = "0 до " + instrument.maxScore + " · " + instrument.subtitle;
+  scale.textContent = series.min + " до " + series.max + " · " + series.subtitle;
   caption.appendChild(name);
   caption.appendChild(scale);
   figure.appendChild(caption);
@@ -389,7 +572,7 @@ function renderChart(container, instrument, entries) {
   if (entries.length === 0) {
     const empty = document.createElement("div");
     empty.className = "empty";
-    empty.textContent = "Ще немає проходжень";
+    empty.textContent = series === MOOD_SERIES ? "Ще немає відміток" : "Ще немає проходжень";
     figure.appendChild(empty);
     container.appendChild(figure);
     return;
@@ -402,14 +585,14 @@ function renderChart(container, instrument, entries) {
   const pad = { top: 12, right: 30, bottom: 22, left: 26 };
   const plotW = width - pad.left - pad.right;
   const plotH = height - pad.top - pad.bottom;
-  const color = seriesColor(instrument);
+  const color = series.color;
 
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", "0 0 " + width + " " + height);
   svg.setAttribute("class", "chart");
   svg.setAttribute("role", "img");
-  svg.setAttribute("aria-label", instrument.title + ": " + entries.length + " проходжень, останній бал " +
-    entries[entries.length - 1].score + " з " + instrument.maxScore);
+  svg.setAttribute("aria-label", series.title + ": " + entries.length + " записів, останній бал " +
+    entries[entries.length - 1].score + " з " + series.max);
 
   const make = (tag, attrs) => {
     const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
@@ -419,11 +602,13 @@ function renderChart(container, instrument, entries) {
   const x = (index) => entries.length === 1
     ? pad.left + plotW / 2
     : pad.left + (index / (entries.length - 1)) * plotW;
-  const y = (value) => pad.top + plotH - (value / instrument.maxScore) * plotH;
+  const y = (value) => pad.top + plotH - ((value - series.min) / (series.max - series.min)) * plotH;
 
-  // Hairline grid, one shade off the surface. The middle tick is a whole number
-  // so the label and the line it names sit at the same value.
-  [0, Math.round(instrument.maxScore / 2), instrument.maxScore].forEach((value) => {
+  // Hairline grid at both ends of the scale. The threshold takes the middle
+  // tick's place in the gutter, so its label never sits on the data: inside
+  // the plot it collided with any run that started near the threshold. A
+  // series without a threshold gets a whole-number middle tick instead.
+  [series.min, series.max].forEach((value) => {
     svg.appendChild(make("line", {
       class: "grid-line", x1: pad.left, x2: pad.left + plotW, y1: y(value), y2: y(value),
     }));
@@ -431,14 +616,22 @@ function renderChart(container, instrument, entries) {
       class: "axis-text", x: pad.left - 6, y: y(value) + 3, "text-anchor": "end",
     })).textContent = String(value);
   });
-  // A dashed rule for the threshold the instrument actually defines, labelled
-  // at the left edge: the right edge belongs to the endpoint value.
-  svg.appendChild(make("line", {
-    class: "cut-line", x1: pad.left, x2: pad.left + plotW, y1: y(instrument.cutoff), y2: y(instrument.cutoff),
-  }));
-  svg.appendChild(make("text", {
-    class: "cut-text", x: pad.left + 2, y: y(instrument.cutoff) - 4, "text-anchor": "start",
-  })).textContent = "поріг " + instrument.cutoff;
+  if (series.cutoff !== null) {
+    svg.appendChild(make("line", {
+      class: "cut-line", x1: pad.left, x2: pad.left + plotW, y1: y(series.cutoff), y2: y(series.cutoff),
+    }));
+    svg.appendChild(make("text", {
+      class: "cut-text", x: pad.left - 6, y: y(series.cutoff) + 3, "text-anchor": "end",
+    })).textContent = String(series.cutoff);
+  } else {
+    const middle = Math.round((series.min + series.max) / 2);
+    svg.appendChild(make("line", {
+      class: "grid-line", x1: pad.left, x2: pad.left + plotW, y1: y(middle), y2: y(middle),
+    }));
+    svg.appendChild(make("text", {
+      class: "axis-text", x: pad.left - 6, y: y(middle) + 3, "text-anchor": "end",
+    })).textContent = String(middle);
+  }
 
   if (entries.length > 1) {
     svg.appendChild(make("path", {
@@ -495,7 +688,7 @@ function renderChart(container, instrument, entries) {
     crosshair.setAttribute("x2", x(nearest));
     crosshair.style.opacity = "1";
     tip.textContent = new Date(entry.at).toLocaleDateString("uk-UA") + " · " + entry.score + "/" +
-      instrument.maxScore + " · " + entry.severity;
+      series.max + (entry.severity ? " · " + entry.severity : "");
     tip.style.left = ((x(nearest) / width) * 100) + "%";
     tip.style.top = ((y(entry.score) / height) * 100) + "%";
     tip.style.opacity = "1";
@@ -516,7 +709,15 @@ function renderChart(container, instrument, entries) {
   container.appendChild(figure);
 }
 
-function renderTiles(container, results) {
+function moodEntries(moods) {
+  return moods.map((mood) => ({
+    at: mood.at,
+    score: mood.rating,
+    severity: mood.tags.map((id) => (MOOD_TAGS.find((tag) => tag.id === id) || {}).label).filter(Boolean).join(", "),
+  }));
+}
+
+function renderTiles(container, results, moods) {
   container.textContent = "";
   INSTRUMENT_LIST.forEach((instrument) => {
     const entries = results.filter((entry) => entry.instrument === instrument.id);
@@ -547,15 +748,40 @@ function renderTiles(container, results) {
     tile.appendChild(sub);
     container.appendChild(tile);
   });
+  const tile = document.createElement("div");
+  tile.className = "tile";
+  const label = document.createElement("div");
+  label.className = "tile-label";
+  const swatch = document.createElement("span");
+  swatch.className = "swatch";
+  swatch.style.background = MOOD_SERIES.color;
+  label.appendChild(swatch);
+  label.appendChild(document.createTextNode("Настрій"));
+  const last = moods[moods.length - 1];
+  const value = document.createElement("div");
+  value.className = "tile-value";
+  value.textContent = last ? String(last.rating) : "нема";
+  const sub = document.createElement("div");
+  sub.className = "tile-sub";
+  const recent = moods.slice(-7);
+  sub.textContent = last
+    ? "середнє за " + recent.length + ": " + (recent.reduce((sum, mood) => sum + mood.rating, 0) / recent.length)
+      .toFixed(1).replace(".", ",")
+    : "ще не відмічали";
+  tile.appendChild(label);
+  tile.appendChild(value);
+  tile.appendChild(sub);
+  container.appendChild(tile);
 }
 
 async function renderStats() {
   state.results = await loadResults();
-  renderTiles($("stats-tiles"), state.results);
+  state.moods = await loadMoods();
+  renderTiles($("stats-tiles"), state.results, state.moods);
   const locked = $("stats-locked");
   locked.hidden = state.unlocked;
   if (!state.unlocked) {
-    locked.textContent = "Повна статистика і шкали сну та стресу входять у повний доступ. " +
+    locked.textContent = "Повна статистика, додаткові шкали і відмітка настрою входять у повний доступ. " +
       "Відкрийте його в чаті командою /buy.";
   }
   const charts = $("stats-charts");
@@ -565,8 +791,14 @@ async function renderStats() {
     const card = document.createElement("div");
     card.className = "card";
     charts.appendChild(card);
-    renderChart(card, instrument, state.results.filter((entry) => entry.instrument === instrument.id));
+    renderChart(card, seriesOf(instrument), state.results.filter((entry) => entry.instrument === instrument.id));
   });
+  if (state.unlocked) {
+    const card = document.createElement("div");
+    card.className = "card";
+    charts.appendChild(card);
+    renderChart(card, MOOD_SERIES, moodEntries(state.moods));
+  }
 }
 
 async function renderHistory() {
@@ -646,12 +878,17 @@ async function renderReminders() {
 
 async function renderData() {
   state.results = await loadResults();
+  state.moods = await loadMoods();
   $("data-count").textContent = String(state.results.length);
   $("data-import-msg").textContent = "";
 }
 
 function exportFile() {
-  const body = JSON.stringify({ exportedAt: new Date().toISOString(), results: state.results }, null, 2);
+  const body = JSON.stringify({
+    exportedAt: new Date().toISOString(),
+    results: state.results,
+    moods: state.moods.map((mood) => ({ date: mood.date, rating: mood.rating, tags: mood.tags })),
+  }, null, 2);
   const blob = new Blob([body], { type: "application/json" });
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
@@ -685,9 +922,20 @@ async function importFromChat() {
     known.add(entry.completedAt);
     added += 1;
   }
+  // Check-ins from the chat come along too; one per day, the chat's copy wins.
+  let moodsAdded = 0;
+  const moodRows = Array.isArray(parsed.moods) ? parsed.moods : [];
+  for (const row of moodRows) {
+    const mood = decodeMood(JSON.stringify(row));
+    if (!mood) continue;
+    await saveMoodLocally(mood);
+    moodsAdded += 1;
+  }
   state.results = await loadResults();
-  message.textContent = added
-    ? "Додано проходжень: " + added + ". Загалом: " + state.results.length + "."
+  state.moods = await loadMoods();
+  message.textContent = added || moodsAdded
+    ? "Додано проходжень: " + added + ", відміток настрою: " + moodsAdded + ". Загалом проходжень: " +
+      state.results.length + "."
     : "Нових проходжень не знайдено.";
   $("data-count").textContent = String(state.results.length);
 }
@@ -701,6 +949,13 @@ Array.prototype.forEach.call(document.querySelectorAll("[data-go]"), (node) => {
     if (target === "history") renderHistory();
     if (target === "reminders") renderReminders();
     if (target === "data") renderData();
+    if (target === "sos") renderSos();
+    if (target === "practices") renderPractices();
+    if (target === "booking") renderBooking();
+    if (target === "mood") {
+      renderMood();
+      if (!state.unlocked) return;
+    }
     show(target);
   });
 });
@@ -742,6 +997,30 @@ $("rem-save").addEventListener("click", async () => {
   };
   await storageSet(SETTINGS_KEY, JSON.stringify(settings));
   submit({ type: "reminders", enabled: settings.enabled, time: settings.time, tz: settings.tz });
+});
+
+$("sos-contact").addEventListener("click", openContact);
+
+$("mood-save").addEventListener("click", async () => {
+  if (!state.mood.rating) return;
+  haptic("medium");
+  const mood = { date: todayKey(), rating: state.mood.rating, tags: state.mood.tags.slice() };
+  await saveMoodLocally(mood);
+  submit({ type: "mood", rating: mood.rating, tags: mood.tags });
+});
+
+$("report-notes").addEventListener("click", () => submit({ type: "report", notes: true }));
+$("report-plain").addEventListener("click", () => submit({ type: "report", notes: false }));
+
+$("book-send").addEventListener("click", () => {
+  haptic("medium");
+  submit({
+    type: "book",
+    format: $("book-format").value,
+    time: $("book-time").value,
+    request: $("book-request").value.trim() || null,
+    scores: $("book-scores").checked,
+  });
 });
 
 $("data-export").addEventListener("click", exportFile);

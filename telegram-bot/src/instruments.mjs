@@ -263,8 +263,132 @@ export const STRESS = {
   ],
 };
 
-export const INSTRUMENTS = { [GAD7.id]: GAD7, [PHQ9.id]: PHQ9, [SLEEP.id]: SLEEP, [STRESS.id]: STRESS };
-export const INSTRUMENT_LIST = [GAD7, PHQ9, SLEEP, STRESS];
+// PCL-5 is a work of the US National Center for PTSD and is in the public
+// domain, so unlike ISI or PSS-10 it can ship in a paid product as published:
+//   Weathers FW, Litz BT, Keane TM, Palmieri PA, Marx BP, Schnurr PP. The PTSD
+//   Checklist for DSM-5 (PCL-5). National Center for PTSD, 2013.
+// A total of 31 to 33 marks probable PTSD across samples (Bovin et al. 2016);
+// 33 is the value the authors first proposed and the one used here. The
+// Ukrainian wording is a working translation, like GAD-7 and PHQ-9.
+const PCL_OPTIONS = [
+  { value: 0, label: "Зовсім ні" },
+  { value: 1, label: "Трохи" },
+  { value: 2, label: "Помірно" },
+  { value: 3, label: "Досить сильно" },
+  { value: 4, label: "Надзвичайно" },
+];
+
+const pclItem = (text) => ({ text, options: PCL_OPTIONS, scored: true });
+
+export const PCL5 = {
+  id: "pcl5",
+  title: "PCL-5",
+  subtitle: "посттравматичний стрес",
+  command: "/pcl5",
+  prompt: "Нижче проблеми, які іноді виникають після дуже стресового досвіду. " +
+    "Наскільки кожна з них турбувала Вас протягом останнього місяця?",
+  maxScore: 80,
+  cutoff: 33,
+  paid: true,
+  items: [
+    pclItem("Повторювані, тривожні й небажані спогади про стресовий досвід"),
+    pclItem("Повторювані тривожні сни про стресовий досвід"),
+    pclItem("Раптові відчуття або дії, ніби стресова подія відбувається знову, ніби Ви знову там"),
+    pclItem("Сильне засмучення, коли щось нагадувало про стресовий досвід"),
+    pclItem("Сильні тілесні реакції, коли щось нагадувало про стресовий досвід: серцебиття, " +
+      "важко дихати, пітливість"),
+    pclItem("Уникання спогадів, думок або почуттів, пов'язаних зі стресовим досвідом"),
+    pclItem("Уникання зовнішніх нагадувань про стресовий досвід: людей, місць, розмов, занять, " +
+      "речей або ситуацій"),
+    pclItem("Труднощі з пригадуванням важливих частин стресового досвіду"),
+    pclItem("Сильні негативні переконання про себе, інших людей або світ, наприклад: " +
+      "«зі мною щось серйозно не так», «нікому не можна довіряти», «світ цілком небезпечний»"),
+    pclItem("Звинувачення себе або когось іншого у стресовій події чи в тому, що сталося після неї"),
+    pclItem("Сильні негативні почуття: страх, жах, гнів, провина або сором"),
+    pclItem("Втрата інтересу до занять, які раніше подобалися"),
+    pclItem("Відчуття віддаленості або відірваності від інших людей"),
+    pclItem("Труднощі з позитивними почуттями, наприклад з радістю або любов'ю до близьких"),
+    pclItem("Дратівливість, спалахи гніву або агресивна поведінка"),
+    pclItem("Надмірний ризик або дії, які можуть Вам зашкодити"),
+    pclItem("Постійна настороженість або надмірна пильність"),
+    pclItem("Схильність легко лякатися або здригатися"),
+    pclItem("Труднощі з концентрацією"),
+    pclItem("Труднощі із засинанням або уривчастий сон"),
+  ],
+  bands: [
+    {
+      max: 32,
+      label: "прояви нижче порогу",
+      description: "Реакції на пережитий стрес, якщо й є, не досягають рівня, за якого зазвичай " +
+        "радять звернутися до фахівця.",
+    },
+    {
+      max: 80,
+      label: "виражені прояви посттравматичного стресу",
+      description: "Спогади, напруження, уникання або постійна пильність після пережитого помітно " +
+        "впливають на життя.",
+    },
+  ],
+};
+
+// Written for this bot in place of WHO-5: WHO publishes WHO-5 under CC BY-NC-SA,
+// which rules out a paid product, and copying its items without the name would
+// breach the same licence. None of these items restates a WHO-5 item. Higher
+// is better here, the reverse of every other scale, so the threshold is
+// crossed from above: a total at or below the cutoff is the worrying side.
+const WELLBEING_OPTIONS = [
+  { value: 0, label: "Ніколи" },
+  { value: 1, label: "Рідко" },
+  { value: 2, label: "Іноді" },
+  { value: 3, label: "Часто" },
+  { value: 4, label: "Майже завжди" },
+];
+
+const wellbeingItem = (text) => ({ text, options: WELLBEING_OPTIONS, scored: true });
+
+export const WELLBEING = {
+  id: "wellbeing",
+  title: "Самопочуття",
+  subtitle: "ресурс і опора",
+  command: "/wellbeing",
+  prompt: "Як часто протягом останніх 2 тижнів це було про Вас?",
+  maxScore: 24,
+  cutoff: 8,
+  higherIsBetter: true,
+  paid: true,
+  caveat: OWN_SCALE_CAVEAT,
+  items: [
+    wellbeingItem("Вдавалося радіти дрібницям"),
+    wellbeingItem("Відчували підтримку або зв'язок із близькими людьми"),
+    wellbeingItem("Мали сили на справи, які для Вас важливі"),
+    wellbeingItem("Знаходили час на те, що Вам подобається"),
+    wellbeingItem("Відчували, що можете впливати на своє життя"),
+    wellbeingItem("Бачили сенс у тому, що робите"),
+  ],
+  bands: [
+    {
+      max: 8,
+      label: "низьке самопочуття",
+      description: "Зараз мало ресурсу: радості, сил і відчуття опори бракує більшу частину часу.",
+    },
+    {
+      max: 16,
+      label: "помірне самопочуття",
+      description: "Ресурс є, але нестійкий: добрі дні чергуються з виснажливими.",
+    },
+    {
+      max: 24,
+      label: "добре самопочуття",
+      description: "Здебільшого вистачає сил, радості й відчуття, що життя у Ваших руках.",
+    },
+  ],
+};
+
+export const INSTRUMENTS = {
+  [GAD7.id]: GAD7, [PHQ9.id]: PHQ9, [SLEEP.id]: SLEEP, [STRESS.id]: STRESS,
+  [PCL5.id]: PCL5, [WELLBEING.id]: WELLBEING,
+};
+export const INSTRUMENT_LIST = [GAD7, PHQ9, SLEEP, STRESS, PCL5, WELLBEING];
 export const FREE_INSTRUMENT_LIST = INSTRUMENT_LIST.filter((instrument) => !instrument.paid);
 export const PAID_INSTRUMENT_LIST = INSTRUMENT_LIST.filter((instrument) => instrument.paid);
 
@@ -323,9 +447,11 @@ const SUPPORT_RISK = "Про думки щодо смерті чи самоуш�
 export function interpretResult(instrument, result) {
   const risk = Boolean(result.risk);
   const riskBelowCutoff = risk && !result.aboveCutoff;
-  let advice = "Бал нижче порогу " + instrument.cutoff + ". Продовжуйте спостерігати за динамікою.";
+  const worrying = instrument.higherIsBetter ? "не вище порогу " : "вище порогу ";
+  const settled = instrument.higherIsBetter ? "вище порогу " : "нижче порогу ";
+  let advice = "Бал " + settled + instrument.cutoff + ". Продовжуйте спостерігати за динамікою.";
   if (result.aboveCutoff) {
-    advice = "Бал вище порогу " + instrument.cutoff + ". Це підстава обговорити стан із лікарем або психотерапевтом.";
+    advice = "Бал " + worrying + instrument.cutoff + ". Це підстава обговорити стан із лікарем або психотерапевтом.";
   } else if (riskBelowCutoff) {
     advice = "Бал нижче порогу " + instrument.cutoff + ", але цю відповідь варто обговорити з фахівцем, " +
       "не чекаючи наступного тесту.";
@@ -348,6 +474,13 @@ export function riskFlagged(instrument, answers) {
   return Number(answers[risk.index]) >= risk.threshold;
 }
 
+// True when a score sits on the worrying side of the scale's threshold. The
+// stored field keeps its historical name `aboveCutoff`; for a scale where
+// higher is better, the worrying side is at or below the cutoff.
+export function crossesCutoff(instrument, score) {
+  return instrument.higherIsBetter ? score <= instrument.cutoff : score >= instrument.cutoff;
+}
+
 export function buildResult(instrument, answers, completedAtMs) {
   const score = scoreAnswers(instrument, answers);
   const impairmentIndex = instrument.items.findIndex((item) => !item.scored);
@@ -356,7 +489,7 @@ export function buildResult(instrument, answers, completedAtMs) {
     score,
     maxScore: instrument.maxScore,
     severity: severityOf(instrument, score),
-    aboveCutoff: score >= instrument.cutoff,
+    aboveCutoff: crossesCutoff(instrument, score),
     risk: riskFlagged(instrument, answers),
     answers: answers.slice(),
     impairment: impairmentIndex === -1 ? null : answers[impairmentIndex],

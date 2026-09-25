@@ -15,6 +15,7 @@ export class SessionManager {
   constructor(options = {}) {
     this.byChat = new Map();
     this.notesByChat = new Map();
+    this.bookingsByChat = new Map();
     this.counter = 0;
     this.idleTimeoutMs = options.idleTimeoutMs === undefined ? 60 * 60 * 1000 : Number(options.idleTimeoutMs);
   }
@@ -113,5 +114,46 @@ export class SessionManager {
 
   pendingNoteCount() {
     return this.notesByChat.size;
+  }
+
+  // A consultation request in progress: format, time, a free-text request
+  // and whether to include the latest scores. Memory only, like everything
+  // here; a restart just means answering four quick questions again.
+  startBooking(chatId, nowMs) {
+    const booking = {
+      chatId: Number(chatId),
+      step: "format",
+      format: null,
+      time: null,
+      request: null,
+      updatedAt: nowMs === undefined ? Date.now() : nowMs,
+    };
+    this.bookingsByChat.set(booking.chatId, booking);
+    return booking;
+  }
+
+  booking(chatId, nowMs) {
+    const booking = this.bookingsByChat.get(Number(chatId));
+    if (!booking) return null;
+    if (nowMs !== undefined && this.idleTimeoutMs > 0 && nowMs - booking.updatedAt > this.idleTimeoutMs) {
+      this.bookingsByChat.delete(booking.chatId);
+      return null;
+    }
+    return booking;
+  }
+
+  updateBooking(chatId, patch, nowMs) {
+    const booking = this.booking(chatId, nowMs);
+    if (!booking) return null;
+    Object.assign(booking, patch, { updatedAt: nowMs === undefined ? Date.now() : nowMs });
+    return booking;
+  }
+
+  clearBooking(chatId) {
+    return this.bookingsByChat.delete(Number(chatId));
+  }
+
+  pendingBookingCount() {
+    return this.bookingsByChat.size;
   }
 }

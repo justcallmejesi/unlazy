@@ -9,6 +9,9 @@
 import { getInstrument } from "./instruments.mjs";
 import { parseTimeOfDay } from "./reminders.mjs";
 import { MAX_NOTE_LENGTH } from "./store.mjs";
+import {
+  BOOKING_FORMATS, BOOKING_TIMES, MAX_BOOKING_REQUEST, MOOD_MAX, MOOD_MIN, bookingOption, moodTag,
+} from "./selfhelp.mjs";
 
 export const PAYLOAD_VERSION = 1;
 // Telegram's own ceiling for sendData. Rejected here too, so an oversized
@@ -34,6 +37,9 @@ export function parseWebAppPayload(raw) {
   if (parsed.type === "result") return parseResult(parsed);
   if (parsed.type === "reminders") return parseReminders(parsed);
   if (parsed.type === "delete") return { ok: true, payload: { type: "delete" } };
+  if (parsed.type === "mood") return parseMood(parsed);
+  if (parsed.type === "report") return { ok: true, payload: { type: "report", includeNotes: parsed.notes === true } };
+  if (parsed.type === "book") return parseBooking(parsed);
   return fail("unknown payload type " + String(parsed.type));
 }
 
@@ -84,4 +90,35 @@ function parseReminders(parsed) {
   }
   if (!Object.keys(settings).length) return fail("reminders payload changes nothing");
   return { ok: true, payload: { type: "reminders", settings } };
+}
+
+function parseMood(parsed) {
+  if (!Number.isInteger(parsed.rating) || parsed.rating < MOOD_MIN || parsed.rating > MOOD_MAX) {
+    return fail("rating must be a whole number from " + MOOD_MIN + " to " + MOOD_MAX);
+  }
+  const raw = parsed.tags === undefined || parsed.tags === null ? [] : parsed.tags;
+  if (!Array.isArray(raw)) return fail("tags must be an array");
+  const tags = [];
+  for (const tag of raw) {
+    if (typeof tag !== "string" || !moodTag(tag)) return fail("unknown mood tag " + String(tag));
+    if (tags.indexOf(tag) === -1) tags.push(tag);
+  }
+  return { ok: true, payload: { type: "mood", rating: parsed.rating, tags } };
+}
+
+// Every field is optional except the choice lists, which must name a known
+// option, so nothing unexpected can reach the draft the person sends.
+function parseBooking(parsed) {
+  if (!bookingOption(BOOKING_FORMATS, parsed.format)) return fail("unknown booking format " + String(parsed.format));
+  if (!bookingOption(BOOKING_TIMES, parsed.time)) return fail("unknown booking time " + String(parsed.time));
+  let request = null;
+  if (parsed.request !== undefined && parsed.request !== null) {
+    if (typeof parsed.request !== "string") return fail("request must be a string");
+    const flat = parsed.request.trim().replace(/\s+/g, " ");
+    if (flat) request = flat.slice(0, MAX_BOOKING_REQUEST);
+  }
+  return {
+    ok: true,
+    payload: { type: "book", format: parsed.format, time: parsed.time, request, scores: parsed.scores === true },
+  };
 }

@@ -9,6 +9,10 @@ import {
 } from "./instruments.mjs";
 import { formatLocalDateTime, formatTimeOfDay, formatUtcOffset, offsetAt } from "./reminders.mjs";
 import { MAX_NOTE_LENGTH } from "./store.mjs";
+import {
+  BOOKING_FORMATS, BOOKING_TIMES, MOOD_CRISIS, MOOD_LOW, MOOD_TAGS, PRACTICE_IDS, PRACTICES, SOS_BUTTON,
+  SOS_EMERGENCY, SOS_INTRO, SOS_STEPS, SOS_TITLE, bookingOption, moodTag,
+} from "./selfhelp.mjs";
 
 // Nominative for naming the day, and the "every Monday" adverb form.
 export const WEEKDAY_NAMES = [
@@ -47,6 +51,13 @@ export const COMMANDS = [
   { command: "phq9", description: "Пройти PHQ-9 (настрій, 9 питань)" },
   { command: "sleep", description: "Щоденник сну (7 питань)" },
   { command: "stress", description: "Рівень напруження (8 питань)" },
+  { command: "pcl5", description: "PCL-5: посттравматичний стрес (20 питань)" },
+  { command: "wellbeing", description: "Самопочуття: ресурс і опора (6 питань)" },
+  { command: "mood", description: "Відмітити настрій сьогодні (повний доступ)" },
+  { command: "selfhelp", description: "Техніки самодопомоги" },
+  { command: "sos", description: "Мені зараз погано" },
+  { command: "report", description: "Звіт для фахівця" },
+  { command: "book", description: "Записатися на консультацію" },
   { command: "results", description: "Історія результатів (повний доступ)" },
   { command: "last", description: "Останні результати (повний доступ)" },
   { command: "remind", description: "Нагадування (повний доступ)" },
@@ -78,10 +89,11 @@ export function greeting(name, schedule, options = {}) {
     hello,
     "",
     "Я допомагаю регулярно відстежувати стан за короткими опитувальниками:",
-    "• <b>GAD-7</b>: 7 питань про тривогу",
-    "• <b>PHQ-9</b>: 9 питань про настрій, плюс одне питання про те, як це ускладнювало життя",
-    "• <b>Сон</b>: 7 питань про останні 2 тижні",
-    "• <b>Стрес</b>: 8 питань про напруження за останній місяць",
+  ].concat(INSTRUMENT_LIST.map((instrument) => "• <b>" + escapeHtml(instrument.title) + "</b>: " +
+    escapeHtml(instrument.subtitle) + ", " + instrument.items.length + " " + questionWord(instrument.items.length)), [
+    "",
+    "Ще тут є щоденна відмітка настрою /mood, техніки самодопомоги /selfhelp і звіт для фахівця /report.",
+    "Якщо зараз важко: кнопка «" + escapeHtml(SOS_BUTTON) + "» під полем введення або /sos.",
     "",
     options.remindersActive
       ? "Результати зберігаються, щоб Ви бачили динаміку. " +
@@ -93,7 +105,15 @@ export function greeting(name, schedule, options = {}) {
     extra || null,
     "",
     "Команди: /help",
-  ].filter((line) => line !== null).join("\n");
+  ]).filter((line) => line !== null).join("\n");
+}
+
+function questionWord(count) {
+  const last = count % 10;
+  const lastTwo = count % 100;
+  if (last === 1 && lastTwo !== 11) return "питання";
+  if (last >= 2 && last <= 4 && (lastTwo < 12 || lastTwo > 14)) return "питання";
+  return "питань";
 }
 
 export function helpText() {
@@ -119,6 +139,12 @@ export function aboutText(reminderLine) {
     "Сон: 0 до 28 балів. 0 до 6 спокійно, 7 до 13 легкі порушення, 14 до 20 помірні, 21 до 28 виражені.",
     "Стрес: 0 до 32 балів. 0 до 9 низький, 10 до 19 помірний, 20 до 32 високий. Два питання враховуються " +
       "навпаки, щоб згода з усім не давала високий бал сама собою.",
+    "",
+    "<b>PCL-5</b>: скринінг посттравматичного стресу, 20 питань про останній місяць. Діапазон від 0 до 80 балів, " +
+      "33 і вище прийнято вважати підставою звернутися до фахівця. Опитувальник у відкритому доступі.",
+    "",
+    "<b>Самопочуття</b>: власна шкала бота, 6 питань про ресурс і опору, від 0 до 24 балів. Тут вищий бал " +
+      "означає кращий стан: 0 до 8 низьке, 9 до 16 помірне, 17 до 24 добре самопочуття.",
     "",
     "<b>Що зберігає бот</b>",
     "Ваш ідентифікатор чату, відповіді та бали кожного проходження, налаштування нагадувань.",
@@ -162,6 +188,7 @@ export function paywall(price, entitlementState) {
   PAID_INSTRUMENT_LIST.forEach((instrument) => {
     lines.push("• " + escapeHtml(instrument.title) + ": " + escapeHtml(instrument.subtitle));
   });
+  lines.push("• щоденна відмітка настрою з графіком");
   lines.push("• історія всіх проходжень і статистика з графіками");
   lines.push("• щотижневе нагадування і його налаштування");
   lines.push("");
@@ -170,6 +197,8 @@ export function paywall(price, entitlementState) {
     lines.push("• " + escapeHtml(instrument.title) + ": " + escapeHtml(instrument.subtitle) + ", сам тест і результат");
   });
   lines.push("• блок підтримки, якщо в PHQ-9 позначено ризик");
+  lines.push("• техніки самодопомоги і кнопка «Мені зараз погано»");
+  lines.push("• звіт для фахівця і запис на консультацію");
   lines.push("• /export і /delete: Ваші дані завжди Ваші");
   lines.push("");
   lines.push("Ціна: <b>" + escapeHtml(priceLine(price)) + "</b>. Оплата зірками Telegram.");
@@ -189,11 +218,17 @@ export function purchaseThanks(price) {
   return [
     "Дякую, повний доступ відкрито назавжди.",
     "",
-    "Тепер доступні " + PAID_INSTRUMENT_LIST.map((instrument) => instrument.title).join(" і ") +
-      ", повна історія і статистика за всіма шкалами.",
+    "Тепер доступні " + listWords(PAID_INSTRUMENT_LIST.map((instrument) => instrument.title)) +
+      ", відмітка настрою, повна історія і статистика за всіма шкалами.",
     "",
     "Питання щодо оплати: /paysupport",
   ].join("\n");
+}
+
+// "А, Б і В": commas, then one "і" before the last item.
+function listWords(items) {
+  if (items.length <= 1) return items.join("");
+  return items.slice(0, -1).join(", ") + " і " + items[items.length - 1];
 }
 
 export function alreadyPro() {
@@ -204,7 +239,14 @@ export function alreadyPro() {
 // sends it automatically, which is exactly right for health data: the prefill
 // is a draft, the send is their decision.
 export function helpRequestText(store, chatId, schedule) {
-  const lines = ["Вітаю! Я пройшов опитувальники в боті і хотів би звернутися за допомогою.", "", "Мої результати:"];
+  return ["Вітаю! Я пройшов опитувальники в боті і хотів би звернутися за допомогою.", "", "Мої результати:"]
+    .concat(latestScoreLines(store, chatId, schedule)).join("\n");
+}
+
+// The latest run of every scale, one plain line each, for a draft the person
+// sends themselves.
+export function latestScoreLines(store, chatId, schedule) {
+  const lines = [];
   INSTRUMENT_LIST.forEach((instrument) => {
     const entry = store.lastResult(chatId, instrument.id);
     if (!entry) return;
@@ -212,7 +254,7 @@ export function helpRequestText(store, chatId, schedule) {
     lines.push(instrument.title + " (" + instrument.subtitle + "): " + entry.score + " з " + shape.maxScore +
       ", " + shape.severity + ", " + dateIn(schedule, Date.parse(entry.completedAt)));
   });
-  return lines.join("\n");
+  return lines;
 }
 
 export function helpOffer(contact, requestText) {
@@ -234,14 +276,15 @@ export function helpOffer(contact, requestText) {
 
 // Telegram fills the message box from ?text= and leaves the sending to the
 // person. The draft is capped so no client truncates the link.
-export function helpKeyboard(contact, requestText) {
+export function helpKeyboard(contact, requestText, options = {}) {
   const draft = requestText.length > 600 ? requestText.slice(0, 600) : requestText;
-  return {
-    inline_keyboard: [[{
-      text: contact.name ? "Написати: " + contact.name : "Написати @" + contact.username,
-      url: "https://t.me/" + contact.username + "?text=" + encodeURIComponent(draft),
-    }]],
-  };
+  const verb = options.verb || "Написати";
+  const rows = [[{
+    text: contact.name ? verb + ": " + contact.name : verb + " @" + contact.username,
+    url: "https://t.me/" + contact.username + "?text=" + encodeURIComponent(draft),
+  }]];
+  if (options.booking) rows.push([{ text: "Записатися на консультацію", callback_data: "b|start" }]);
+  return { inline_keyboard: rows };
 }
 
 export function contactUnavailable() {
@@ -286,12 +329,17 @@ export function answerKeyboard(instrument, session) {
 // The one full-width button under the input field. A keyboard button is the
 // only launch type whose Mini App can send data back without a server, so this
 // is what the app is opened from.
+//
+// The row under it is "Мені зараз погано", kept in reach at all times: it
+// arrives as a plain message, which the router answers before anything else.
 export function appKeyboard(webappUrl) {
-  return {
-    keyboard: [[{ text: "Відкрити застосунок", web_app: { url: webappUrl } }]],
-    resize_keyboard: true,
-    is_persistent: true,
-  };
+  const rows = webappUrl ? [[{ text: "Відкрити застосунок", web_app: { url: webappUrl } }]] : [];
+  rows.push([{ text: SOS_BUTTON }]);
+  return { keyboard: rows, resize_keyboard: true, is_persistent: true };
+}
+
+export function sosHint() {
+  return "Якщо колись стане зовсім важко, кнопка «" + escapeHtml(SOS_BUTTON) + "» під полем введення завжди поруч.";
 }
 
 export function appIntro() {
@@ -327,16 +375,224 @@ export function startKeyboard(unlocked = true) {
       })),
       paidRow,
       [
+        { text: unlocked ? "Настрій сьогодні" : "Настрій сьогодні 🔒", callback_data: "m|ask" },
+        { text: "Техніки самодопомоги", callback_data: "pp|menu" },
+      ],
+      [
         { text: "Мої результати", callback_data: "h|all" },
         { text: "Нагадування", callback_data: "r|status" },
       ],
+      [{ text: "Звіт для фахівця", callback_data: "rep|ask" }],
     ],
   };
 }
 
+// Under every result: practices matched to the scale, free for everyone.
+export function resultKeyboard(instrument) {
+  return { inline_keyboard: [[{ text: "Що можна зробити зараз", callback_data: "p|" + instrument.id }]] };
+}
+
+function practiceBlock(practice) {
+  return ["<b>" + escapeHtml(practice.title) + "</b>"]
+    .concat(practice.steps.map((step, index) => (index + 1) + ". " + escapeHtml(step)))
+    .join("\n");
+}
+
+export function practicesMessage(practices) {
+  return ["<b>Що можна зробити зараз</b>", "Кілька хвилин, без підготовки.", ""]
+    .concat(practices.map(practiceBlock).join("\n\n"))
+    .concat(["", "Усі техніки: /selfhelp"])
+    .join("\n");
+}
+
+export function practicesMenu() {
+  return "<b>Техніки самодопомоги</b>\n\nКороткі вправи на кілька хвилин. Оберіть одну:";
+}
+
+export function practicesMenuKeyboard() {
+  const buttons = PRACTICE_IDS.map((id) => ({ text: PRACTICES[id].title, callback_data: "pp|" + id }));
+  const rows = [];
+  for (let index = 0; index < buttons.length; index += 2) rows.push(buttons.slice(index, index + 2));
+  return { inline_keyboard: rows };
+}
+
+export function practiceMessage(practice) {
+  return practiceBlock(practice) + "\n\nІнші техніки: /selfhelp";
+}
+
+// Emergency services always come before any personal contact.
+export function sosMessage(crisisContact, contact) {
+  const lines = ["<b>" + escapeHtml(SOS_TITLE) + "</b>", escapeHtml(SOS_INTRO), ""];
+  SOS_STEPS.forEach((step, index) => {
+    lines.push("<b>" + (index + 1) + ". " + escapeHtml(step.title) + ".</b> " + escapeHtml(step.text));
+  });
+  lines.push("", "<b>" + escapeHtml(SOS_EMERGENCY) + "</b>", escapeHtml(crisisContact));
+  if (contact && contact.username) {
+    const who = contact.name || "@" + contact.username;
+    const role = contact.role ? " (" + contact.role + ")" : "";
+    lines.push("", "Можна також написати фахівцю, контакт: " + escapeHtml(who) + escapeHtml(role) + ".");
+  }
+  return lines.join("\n");
+}
+
+export function sosKeyboard(contact) {
+  if (!contact || !contact.username) return undefined;
+  return {
+    inline_keyboard: [[{
+      text: contact.name ? "Написати: " + contact.name : "Написати @" + contact.username,
+      url: "https://t.me/" + contact.username,
+    }]],
+  };
+}
+
+export function moodQuestion() {
+  return "<b>Настрій сьогодні</b>\n\nОцініть від 1 до 10, де 1 дуже погано, а 10 чудово. Одного натискання достатньо.";
+}
+
+export function moodKeyboard() {
+  const button = (value) => ({ text: String(value), callback_data: "m|" + value });
+  return { inline_keyboard: [[1, 2, 3, 4, 5].map(button), [6, 7, 8, 9, 10].map(button)] };
+}
+
+function moodTagLine(entry) {
+  const labels = entry.tags.map((id) => moodTag(id)).filter(Boolean).map((tag) => tag.label);
+  return labels.length ? " · " + escapeHtml(labels.join(", ")) : "";
+}
+
+export function moodSaved(entry) {
+  const lines = ["Настрій сьогодні: <b>" + entry.rating + "</b> з 10. Збережено.", "",
+    "Що найбільше впливало? Можна вибрати кілька або одразу натиснути «Готово»."];
+  if (entry.rating <= MOOD_CRISIS) {
+    lines.push("", "Якщо зараз дуже важко, натисніть «" + escapeHtml(SOS_BUTTON) + "» або /sos.");
+  } else if (entry.rating <= MOOD_LOW) {
+    lines.push("", "Якщо хочеться, кнопка нижче підкаже, що може трохи допомогти.");
+  }
+  return lines.join("\n");
+}
+
+export function moodTagKeyboard(entry) {
+  const buttons = MOOD_TAGS.map((tag) => ({
+    text: (entry.tags.indexOf(tag.id) !== -1 ? "✓ " : "") + tag.label,
+    callback_data: "mt|" + entry.date + "|" + tag.id,
+  }));
+  const rows = [buttons.slice(0, 3), buttons.slice(3)];
+  if (entry.rating <= MOOD_LOW) rows.push([{ text: "Що можна зробити зараз", callback_data: "p|mood" }]);
+  rows.push([{ text: "Готово", callback_data: "md|" + entry.date }]);
+  return { inline_keyboard: rows };
+}
+
+export function moodDone(entry, weekAverage) {
+  const average = weekAverage === null ? "" : "\nСереднє за останні 7 днів: " + weekAverage.toFixed(1).replace(".", ",") + ".";
+  return "Настрій сьогодні: <b>" + entry.rating + "</b> з 10" + moodTagLine(entry) + "." + average;
+}
+
+export function reportIntro() {
+  return [
+    "<b>Звіт для фахівця</b>",
+    "",
+    "Одна сторінка з балами, графіками і, за бажанням, Вашими нотатками про тиждень. Файл відкривається в " +
+      "браузері: його можна показати на консультації, роздрукувати або зберегти як PDF.",
+    "",
+    "Нотатки особисті, тому вирішіть, чи додавати їх.",
+  ].join("\n");
+}
+
+export function reportKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: "З нотатками", callback_data: "rep|notes" }, { text: "Без нотаток", callback_data: "rep|plain" }],
+    ],
+  };
+}
+
+export function reportEmpty() {
+  return "Поки немає даних для звіту. Пройдіть /gad7 або /phq9, і звіт стане доступним.";
+}
+
+export function reportCaption() {
+  return "Звіт для фахівця. Відкрийте файл у браузері, щоб переглянути, роздрукувати або зберегти як PDF.";
+}
+
+export function bookingIntro() {
+  return [
+    "<b>Запис на консультацію</b>",
+    "",
+    "Кілька коротких питань, щоб легше було домовитися про час. Нічого не надсилається автоматично: " +
+      "наприкінці Ви побачите готове повідомлення і надішлете його самі.",
+    "",
+    "<b>Який формат зручніший?</b>",
+  ].join("\n");
+}
+
+function optionKeyboard(options, prefix) {
+  const buttons = options.map((option) => ({ text: option.label, callback_data: prefix + option.id }));
+  const rows = [];
+  for (let index = 0; index < buttons.length; index += 3) rows.push(buttons.slice(index, index + 3));
+  return { inline_keyboard: rows };
+}
+
+export function bookingFormatKeyboard() {
+  return optionKeyboard(BOOKING_FORMATS, "b|f|");
+}
+
+export function bookingTimeQuestion() {
+  return "<b>Коли Вам зручно?</b>";
+}
+
+export function bookingTimeKeyboard() {
+  return optionKeyboard(BOOKING_TIMES, "b|t|");
+}
+
+export function bookingRequestQuestion() {
+  return "<b>З чим хотіли б попрацювати?</b>\n\nОдне-два речення одним повідомленням. Можна пропустити.";
+}
+
+export function bookingRequestKeyboard() {
+  return { inline_keyboard: [[{ text: "Пропустити", callback_data: "b|r|skip" }]] };
+}
+
+export function bookingScoresQuestion() {
+  return "<b>Додати до повідомлення Ваші останні результати?</b>\n\nФахівцю так простіше підготуватися. " +
+    "Ви все одно побачите текст перед надсиланням.";
+}
+
+export function bookingScoresKeyboard() {
+  return { inline_keyboard: [[{ text: "Так", callback_data: "b|s|yes" }, { text: "Ні", callback_data: "b|s|no" }]] };
+}
+
+export function bookingDraft(booking, scoreLines) {
+  const format = bookingOption(BOOKING_FORMATS, booking.format);
+  const time = bookingOption(BOOKING_TIMES, booking.time);
+  const lines = ["Вітаю! Хочу записатися на консультацію."];
+  if (format) lines.push("Формат: " + format.label.toLowerCase());
+  if (time) lines.push("Зручний час: " + time.label.toLowerCase());
+  if (booking.request) lines.push("Запит: " + booking.request);
+  if (scoreLines && scoreLines.length) lines.push("", "Мої останні результати:");
+  return lines.concat(scoreLines && scoreLines.length ? scoreLines : []).join("\n");
+}
+
+export function bookingReady(contact, draft) {
+  const who = contact.name || "@" + contact.username;
+  const role = contact.role ? " (" + contact.role + ")" : "";
+  return [
+    "<b>Готово</b>",
+    "",
+    "Кнопка нижче відкриє чат із готовим повідомленням, контакт: " + escapeHtml(who) + escapeHtml(role) + ". " +
+      "Ви побачите текст, зможете його змінити і надішлете самі.",
+    "",
+    "Текст, якщо зручніше скопіювати:",
+    "<pre>" + escapeHtml(draft) + "</pre>",
+  ].join("\n");
+}
+
+export function bookingExpired() {
+  return "Запис уже завершено або перервано. Почати знову: /book";
+}
+
 export function resultMessage(instrument, result, previous, schedule, crisisContact) {
   const lines = [
-    "<b>" + escapeHtml(instrument.title) + " готовий</b>",
+    // A colon, because "Сон готовий" and "Самопочуття готове" disagree in gender.
+    "<b>" + escapeHtml(instrument.title) + ": готово</b>",
     "",
     "Бали: <b>" + result.score + "</b> з " + instrument.maxScore,
     "Оцінка: " + escapeHtml(result.severity),
@@ -479,7 +735,7 @@ export function weeklyReminder(store, chatId, schedule) {
   });
   const day = weekdayWords(schedule).name;
   return ["<b>" + escapeHtml(day.charAt(0).toUpperCase() + day.slice(1)) + ", час для перевірки</b>", "",
-    "Пройдіть обидва опитувальники, це займе близько двох хвилин."]
+    "Пройдіть опитувальники, кожен займає одну-дві хвилини."]
     .concat(rows)
     .concat(["", "Вимкнути нагадування: /remind off"])
     .join("\n");

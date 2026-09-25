@@ -211,3 +211,11 @@ export function formatLocalDateTime(timestampMs, offsetMinutes) {
   return pad(local.getUTCDate()) + "." + pad(local.getUTCMonth() + 1) + "." + local.getUTCFullYear() +
     " " + pad(local.getUTCHours()) + ":" + pad(local.getUTCMinutes());
 }
+
+// The person's calendar day at an instant, as YYYY-MM-DD, in the offset that
+// applies at that instant. Keys the daily mood check-in, so a check-in at
+// 23:30 Kyiv time counts for that evening and not for the next UTC day.
+export function localDateKey(schedule, timestampMs) {
+  const local = new Date(timestampMs + offsetAt(schedule, timestampMs) * 60 * 1000);
+  return local.toISOString().slice(0, 10);
+}

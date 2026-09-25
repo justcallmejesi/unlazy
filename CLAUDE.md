@@ -21,6 +21,7 @@ See `telegram-bot/README.md`. Locale-bearing values:
 | Value | Where |
 | --- | --- |
 | Questionnaire items, options, severity bands | `telegram-bot/src/instruments.mjs` |
+| Practices, SOS steps, mood tags, booking options | `telegram-bot/src/selfhelp.mjs` |
 | All user-facing copy | `telegram-bot/src/texts.mjs`, plus inline strings in `telegram-bot/src/router.mjs` |
 | Crisis contacts | `DEFAULT_CRISIS_CONTACT` in `telegram-bot/src/config.mjs`, overridable with `CRISIS_CONTACT` |
 | Price, trial, entitlement | `telegram-bot/src/billing.mjs`, `PRICE_STARS` and `TRIAL_DAYS` |
@@ -42,14 +43,23 @@ fixed offset and opts out of seasonal changes until `/tz auto`.
 One-time purchase in Telegram Stars (`XTR`) after a 14-day trial.
 
 Free forever, and it must stay that way: taking GAD-7 and PHQ-9, the result
-with its crisis block, the weekly note, `/export` and `/delete`. A
-questionnaire that asks about self-harm never ends in a payment prompt, and
-access to one's own health data is not a feature to sell.
+with its crisis block, the weekly note, `/export` and `/delete`, the self-help
+practices, "Мені зараз погано" (`/sos`), the specialist report (`/report`) and
+the consultation request (`/book`). A questionnaire that asks about self-harm
+never ends in a payment prompt, and access to one's own health data is not a
+feature to sell.
 
-Paid: the sleep and stress scales, history (`/results`, `/last`), statistics,
-the weekly reminder and its settings (`/remind`, `/tz`).
+Paid: the sleep, stress, PCL-5 and wellbeing scales, the daily mood check-in
+(`/mood`), history (`/results`, `/last`), statistics, the weekly reminder and
+its settings (`/remind`, `/tz`).
 
-The sleep and stress scales are written for this bot, not taken from a
+PCL-5 is in the public domain and ships as published. WHO-5 was asked for but
+is CC BY-NC-SA: no commercial use, and copying its items without the name is
+the same breach. The wellbeing scale is written for this bot instead, like
+sleep and stress, and it is the one scale where higher is better, so its
+threshold is crossed from above (`higherIsBetter`, `crossesCutoff`).
+
+The sleep, stress and wellbeing scales are written for this bot, not taken from a
 published instrument: ISI and PSS-10 are copyrighted and commercial use needs
 the rightsholder's permission. Every result of the bot's own scales states that
 it is self-observation and not a validated screening tool. Keep it that way, or
@@ -74,6 +84,6 @@ Telegram never sends it; the person does. Emergency services always appear
 before the personal contact, and `/contact` stays free.
 
 Chart colours are per scale: anxiety red, depression dark blue, sleep light
-blue, stress burgundy. Light mode clears every check in the dataviz validator;
+blue, stress burgundy, PCL-5 green, wellbeing violet, mood amber. Light mode clears every check in the dataviz validator;
 dark mode has one pair below the separation floor, which is why every chart
 carries its name plus a swatch and no plot ever holds two scales.

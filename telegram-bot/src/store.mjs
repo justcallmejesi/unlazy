@@ -10,9 +10,13 @@ import {
   closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { MOOD_MAX, MOOD_MIN, moodTag } from "./selfhelp.mjs";
 
 export const MAX_RESULTS_PER_USER = 200;
 export const MAX_NOTE_LENGTH = 1000;
+// About thirteen months of daily check-ins.
+export const MAX_MOODS_PER_USER = 400;
+const DATE_KEY = /^\d{4}-\d{2}-\d{2}$/;
 const SNAPSHOT_VERSION = 1;
 // One ceiling for both directions. The writer must never be able to produce a
 // snapshot the reader refuses, so `flush` checks the same number before the
@@ -34,7 +38,20 @@ function defaultUser(chatId) {
     trialEndsAt: null,
     pro: null,
     results: [],
+    moods: [],
   };
+}
+
+// One check-in per local day: a rating from 1 to 10 and any known tags. An
+// entry that does not fit that shape is dropped rather than shown.
+function normalizeMood(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  if (typeof raw.date !== "string" || !DATE_KEY.test(raw.date)) return null;
+  if (!Number.isInteger(raw.rating) || raw.rating < MOOD_MIN || raw.rating > MOOD_MAX) return null;
+  const tags = Array.isArray(raw.tags)
+    ? raw.tags.filter((tag, index, all) => typeof tag === "string" && moodTag(tag) && all.indexOf(tag) === index)
+    : [];
+  return { date: raw.date, rating: raw.rating, tags, at: typeof raw.at === "string" ? raw.at : null };
 }
 
 function normalizeUser(chatId, raw) {
@@ -65,6 +82,10 @@ function normalizeUser(chatId, raw) {
     }
     entry.note = entry.note.trim().slice(0, MAX_NOTE_LENGTH);
   });
+  user.moods = Array.isArray(raw.moods)
+    ? raw.moods.map(normalizeMood).filter(Boolean).sort((left, right) => (left.date < right.date ? -1 : 1))
+      .slice(-MAX_MOODS_PER_USER)
+    : [];
   return user;
 }
 
@@ -185,6 +206,48 @@ export class Store {
     const matching = instrumentId ? results.filter((entry) => entry.instrument === instrumentId) : results;
     const reversed = matching.slice().reverse();
     return limit === Infinity ? reversed : reversed.slice(0, limit);
+  }
+
+  // Oldest first.
+  moods(chatId) {
+    if (!this.users.has(Number(chatId))) return [];
+    return this.user(chatId).moods.slice();
+  }
+
+  moodOn(chatId, date) {
+    if (!this.users.has(Number(chatId))) return null;
+    return this.user(chatId).moods.find((entry) => entry.date === date) || null;
+  }
+
+  // A second check-in on the same local day replaces the first, keeping its
+  // tags, so a misclick can be corrected without a second row.
+  setMood(chatId, entry) {
+    const mood = normalizeMood(entry);
+    if (!mood) return null;
+    const user = this.user(chatId);
+    const existing = user.moods.find((candidate) => candidate.date === mood.date);
+    if (existing) {
+      existing.rating = mood.rating;
+      existing.at = mood.at;
+      if (Array.isArray(entry.tags)) existing.tags = mood.tags;
+      this.touch();
+      return existing;
+    }
+    user.moods.push(mood);
+    user.moods.sort((left, right) => (left.date < right.date ? -1 : 1));
+    if (user.moods.length > MAX_MOODS_PER_USER) user.moods.splice(0, user.moods.length - MAX_MOODS_PER_USER);
+    this.touch();
+    return mood;
+  }
+
+  toggleMoodTag(chatId, date, tagId) {
+    const entry = this.moodOn(chatId, date);
+    if (!entry || !moodTag(tagId)) return null;
+    const at = entry.tags.indexOf(tagId);
+    if (at === -1) entry.tags.push(tagId);
+    else entry.tags.splice(at, 1);
+    this.touch();
+    return entry;
   }
 
   lastResult(chatId, instrumentId) {

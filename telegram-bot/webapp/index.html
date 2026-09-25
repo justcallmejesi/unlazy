@@ -5,7 +5,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>GAD-7 і PHQ-9</title>
+<title>Самоспостереження</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
 :root {
@@ -34,6 +34,12 @@
   --series-phq9: #2f4fa8;
   --series-sleep: #2e9bd4;
   --series-stress: #8f1f3f;
+  /* Added later in this order, which keeps every adjacent pair clear of the
+     validator's floors on white; on the dark card the only failing pair is
+     still the navy and light blue above. */
+  --series-pcl5: #008300;
+  --series-wellbeing: #6a45c2;
+  --series-mood: #c98500;
   --radius: 14px;
 }
 @media (prefers-color-scheme: dark) {
@@ -49,6 +55,9 @@
     --series-phq9: #5878d2;
     --series-sleep: #35a0d4;
     --series-stress: #bf4d80;
+    --series-pcl5: #2e9a3e;
+    --series-wellbeing: #9085e9;
+    --series-mood: #c98500;
     --line: rgba(255, 255, 255, .18);
     --grid: rgba(255, 255, 255, .13);
   }
@@ -65,11 +74,17 @@
   --series-phq9: #5878d2;
   --series-sleep: #35a0d4;
   --series-stress: #bf4d80;
+  --series-pcl5: #2e9a3e;
+  --series-wellbeing: #9085e9;
+  --series-mood: #c98500;
   --line: rgba(255, 255, 255, .18);
   --grid: rgba(255, 255, 255, .13);
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+/* A class that sets display, like .menu-item, would otherwise override the
+   hidden attribute and show a card that has nothing behind it. */
+[hidden] { display: none !important; }
 html, body { margin: 0; padding: 0; background: var(--bg); }
 body {
   font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -176,7 +191,7 @@ figcaption .scale { font-size: 13px; color: var(--ink-3); }
 .chart .grid-line { stroke: var(--grid); stroke-width: 1; }
 .chart .axis-text { fill: var(--ink-3); font-size: 11px; font-variant-numeric: tabular-nums; }
 .chart .cut-line { stroke: var(--ink-3); stroke-width: 1; stroke-dasharray: 3 3; opacity: .7; }
-.chart .cut-text { fill: var(--ink-3); font-size: 10px; }
+.chart .cut-text { fill: var(--ink-2); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .chart .series-line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .chart .marker { stroke: var(--card); stroke-width: 2; }
 .chart .end-label { font-size: 12px; font-weight: 600; fill: var(--ink); }
@@ -198,15 +213,57 @@ td .note { display: block; color: var(--ink-2); font-size: 13px; margin-top: 3px
 .empty { color: var(--ink-3); text-align: center; padding: 26px 10px; }
 .back { background: none; border: 0; color: var(--accent); font: inherit; padding: 6px 0; cursor: pointer; }
 .disclaimer { font-size: 12px; color: var(--ink-3); margin-top: 16px; }
+
+/* "Мені зараз погано" sits first and reads as help, not as an alarm. */
+.menu-item.sos { border-color: var(--danger); }
+.menu-item.sos .glyph { color: var(--danger); }
+.menu-item.sos .title { color: var(--danger); }
+.steps { margin: 6px 0 0; padding-left: 20px; }
+.steps li { margin: 0 0 6px; }
+.sos-step { margin: 0 0 12px; }
+.sos-step b { display: block; }
+.phone { font-weight: 650; color: var(--accent); text-decoration: none; white-space: nowrap; }
+details.practice { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin: 0 0 8px; }
+details.practice summary { font-weight: 600; cursor: pointer; }
+.section-title { font-size: 15px; font-weight: 600; margin: 16px 0 8px; }
+.mood-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.mood-grid button, .chip {
+  font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line);
+  border-radius: 12px; min-height: 48px; cursor: pointer;
+}
+.mood-grid button { font-size: 18px; font-weight: 600; }
+.mood-grid button[aria-pressed="true"], .chip[aria-pressed="true"] {
+  border-color: var(--accent); background: var(--surface); box-shadow: inset 0 0 0 1px var(--accent);
+}
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { padding: 8px 14px; min-height: 40px; font-size: 15px; }
+.check { display: flex; align-items: center; gap: 10px; margin: 12px 0 0; font-size: 15px; }
+.check input { width: 22px; height: 22px; flex: none; }
 </style>
 </head>
 <body>
 
 <div id="home" class="screen active">
   <h1>Самоспостереження</h1>
-  <p class="muted">Тривога, настрій, сон і стрес за короткими шкалами. Результати зберігаються, раз на тиждень приходить нагадування.</p>
+  <p class="muted">Короткі шкали про тривогу, настрій, сон, стрес і самопочуття. Результати зберігаються, раз на тиждень приходить нагадування.</p>
   <div class="menu" id="home-menu">
-    <!-- Questionnaire cards are built from instruments.mjs by app.js. -->
+    <button class="menu-item sos" data-go="sos">
+      <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg>
+      <span class="body"><span class="title">Мені зараз погано</span><span class="hint">кілька кроків просто зараз і телефони допомоги</span></span>
+      <span class="chev">›</span>
+    </button>
+    <!-- Questionnaire cards are built from instruments.mjs by app.js and go here. -->
+    <div id="scale-anchor" hidden></div>
+    <button class="menu-item" id="mood-card" data-go="mood">
+      <svg class="glyph scale" style="--scale-color: var(--series-mood)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M9 14c.8 1 1.8 1.5 3 1.5s2.2-.5 3-1.5"/><path d="M9.5 10h0M14.5 10h0"/></svg>
+      <span class="body"><span class="title">Настрій сьогодні</span><span class="hint">одна відмітка від 1 до 10</span></span>
+      <span class="chev" id="mood-tail">›</span>
+    </button>
+    <button class="menu-item" data-go="practices">
+      <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 12c2-4 4-4 6 0s4 4 6 0 3-3 4-1"/></svg>
+      <span class="body"><span class="title">Техніки самодопомоги</span><span class="hint">дихання, заземлення, сон, маленькі кроки</span></span>
+      <span class="chev">›</span>
+    </button>
     <button class="menu-item" data-go="stats">
       <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V5"/><path d="M4 19h16"/><path d="m7 14 4-5 3 3 4-6"/></svg>
       <span class="body"><span class="title">Статистика</span><span class="hint">динаміка балів за тижнями</span></span>
@@ -215,6 +272,16 @@ td .note { display: block; color: var(--ink-2); font-size: 13px; margin-top: 3px
     <button class="menu-item" data-go="history">
       <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
       <span class="body"><span class="title">Історія</span><span class="hint">усі проходження з описами</span></span>
+      <span class="chev">›</span>
+    </button>
+    <button class="menu-item" data-go="report">
+      <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 13h6M9 17h6"/></svg>
+      <span class="body"><span class="title">Звіт для фахівця</span><span class="hint">бали і графіки однією сторінкою</span></span>
+      <span class="chev">›</span>
+    </button>
+    <button class="menu-item" data-go="booking" id="booking-card" hidden>
+      <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/></svg>
+      <span class="body"><span class="title">Записатися на консультацію</span><span class="hint">готове повідомлення фахівцю</span></span>
       <span class="chev">›</span>
     </button>
     <button class="menu-item" data-go="reminders">
@@ -261,9 +328,67 @@ td .note { display: block; color: var(--ink-2); font-size: 13px; margin-top: 3px
   <p id="result-support"></p>
   <div class="callout" id="result-cutoff"></div>
   <div class="callout warn" id="result-crisis" hidden></div>
+  <div class="section-title">Що можна зробити зараз</div>
+  <div id="result-practices"></div>
   <p class="muted" id="result-caveat" hidden></p>
   <button class="primary" id="result-send">Зберегти і закрити</button>
   <p class="muted" id="result-send-hint">Бал і опис підуть у чат, вікно закриється.</p>
+</div>
+
+<div id="sos" class="screen">
+  <button class="back" data-go="home">‹ Назад</button>
+  <h2 id="sos-title"></h2>
+  <p class="muted" id="sos-intro"></p>
+  <div id="sos-steps"></div>
+  <div class="callout warn">
+    <b id="sos-emergency"></b><br>
+    Екстрена допомога: <a class="phone" href="tel:103">103</a> або <a class="phone" href="tel:112">112</a><br>
+    LifeLine Ukraine, лінія запобігання самогубствам: <a class="phone" href="tel:7333">7333</a>, безкоштовно, круглодобово<br>
+    Національна дитяча гаряча лінія: <a class="phone" href="tel:116111">116 111</a> або <a class="phone" href="tel:0800500225">0 800 500 225</a><br>
+    Служби підтримки: <a href="https://howareu.com" target="_blank" rel="noopener">howareu.com</a>
+  </div>
+  <button class="ghost" id="sos-contact" hidden></button>
+</div>
+
+<div id="mood" class="screen">
+  <button class="back" data-go="home">‹ Назад</button>
+  <h2>Настрій сьогодні</h2>
+  <p class="muted">Від 1, дуже погано, до 10, чудово.</p>
+  <div class="mood-grid" id="mood-grid"></div>
+  <div class="section-title">Що найбільше впливало</div>
+  <div class="chips" id="mood-tags"></div>
+  <button class="primary" id="mood-save" disabled>Зберегти і закрити</button>
+  <p class="muted">Відмітка піде в чат, вікно закриється. Можна відмічати раз на день, повторна відмітка замінює попередню.</p>
+</div>
+
+<div id="practices" class="screen">
+  <button class="back" data-go="home">‹ Назад</button>
+  <h2>Техніки самодопомоги</h2>
+  <p class="muted">Короткі вправи на кілька хвилин, без підготовки.</p>
+  <div id="practices-list"></div>
+</div>
+
+<div id="report" class="screen">
+  <button class="back" data-go="home">‹ Назад</button>
+  <h2>Звіт для фахівця</h2>
+  <p>Одна сторінка з балами і графіками. Бот надішле її в чат файлом: його можна показати на консультації, роздрукувати або зберегти як PDF.</p>
+  <p class="muted">Нотатки про тиждень особисті, тому вирішіть, чи додавати їх.</p>
+  <button class="primary" id="report-notes">Надіслати з нотатками</button>
+  <button class="ghost" id="report-plain">Надіслати без нотаток</button>
+</div>
+
+<div id="booking" class="screen">
+  <button class="back" data-go="home">‹ Назад</button>
+  <h2>Запис на консультацію</h2>
+  <p class="muted">Нічого не надсилається автоматично: у чаті з'явиться кнопка з готовим повідомленням, і Ви надішлете його самі.</p>
+  <label class="field" for="book-format">Формат</label>
+  <select id="book-format"></select>
+  <label class="field" for="book-time">Коли зручно</label>
+  <select id="book-time"></select>
+  <label class="field" for="book-request">З чим хотіли б попрацювати</label>
+  <textarea id="book-request" maxlength="300" placeholder="Одне-два речення, можна пропустити"></textarea>
+  <label class="check"><input type="checkbox" id="book-scores"> Додати мої останні результати</label>
+  <button class="primary" id="book-send">Підготувати повідомлення</button>
 </div>
 
 <div id="stats" class="screen">
@@ -272,7 +397,7 @@ td .note { display: block; color: var(--ink-2); font-size: 13px; margin-top: 3px
   <div class="callout" id="stats-locked" hidden></div>
   <div class="tile-row" id="stats-tiles"></div>
   <div id="stats-charts"></div>
-  <p class="muted">Кожен опитувальник має власну шкалу, тому графіки окремі, а пунктир на кожному це його власний поріг.</p>
+  <p class="muted">Кожен опитувальник має власну шкалу, тому графіки окремі. Пунктир на кожному це його власний поріг, число біля нього на осі. На шкалі самопочуття вищий бал означає кращий стан.</p>
   <button class="ghost" data-go="history">Подивитися таблицею</button>
 </div>
 
@@ -287,7 +412,7 @@ td .note { display: block; color: var(--ink-2); font-size: 13px; margin-top: 3px
   <h2>Нагадування</h2>
   <div class="card">
     <div class="switch">
-      <span>Нагадувати щосереди</span>
+      <span>Щотижневе нагадування</span>
       <input type="checkbox" id="rem-on" checked>
     </div>
     <label class="field" for="rem-time">Час</label>

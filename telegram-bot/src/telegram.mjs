@@ -5,12 +5,47 @@
 // message, or a thrown stack. Every outgoing string is scrubbed through
 // `redact` before it can reach a caller.
 
+import { randomBytes } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { URL } from "node:url";
 
 export const DEFAULT_API_BASE = "https://api.telegram.org";
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+
+// A payload field shaped { filename, content, contentType } is a file to upload,
+// which the Bot API only accepts as multipart/form-data. Everything else goes
+// as JSON. Nested values in a multipart request, reply_markup for one, are
+// JSON-encoded fields, which is how the API reads them there.
+function isFile(value) {
+  return Boolean(value) && typeof value === "object" && typeof value.filename === "string" &&
+    value.content !== undefined && value.content !== null;
+}
+
+export function encodeBody(payload) {
+  const fields = payload === undefined || payload === null ? {} : payload;
+  const hasFile = Object.keys(fields).some((key) => isFile(fields[key]));
+  if (!hasFile) return { body: Buffer.from(JSON.stringify(fields), "utf8"), contentType: "application/json" };
+  const boundary = "----tgbot" + randomBytes(12).toString("hex");
+  const chunks = [];
+  Object.keys(fields).forEach((key) => {
+    const value = fields[key];
+    if (value === undefined || value === null) return;
+    chunks.push(Buffer.from("--" + boundary + "\r\n", "utf8"));
+    if (isFile(value)) {
+      const filename = value.filename.replace(/[^A-Za-z0-9._-]/g, "_");
+      chunks.push(Buffer.from('Content-Disposition: form-data; name="' + key + '"; filename="' + filename + '"\r\n' +
+        "Content-Type: " + (value.contentType || "application/octet-stream") + "\r\n\r\n", "utf8"));
+      chunks.push(Buffer.isBuffer(value.content) ? value.content : Buffer.from(String(value.content), "utf8"));
+      chunks.push(Buffer.from("\r\n", "utf8"));
+      return;
+    }
+    const text = typeof value === "object" ? JSON.stringify(value) : String(value);
+    chunks.push(Buffer.from('Content-Disposition: form-data; name="' + key + '"\r\n\r\n' + text + "\r\n", "utf8"));
+  });
+  chunks.push(Buffer.from("--" + boundary + "--\r\n", "utf8"));
+  return { body: Buffer.concat(chunks), contentType: "multipart/form-data; boundary=" + boundary };
+}
 
 export class TelegramError extends Error {
   constructor(message, details = {}) {
@@ -63,7 +98,7 @@ export class TelegramClient {
 
   send(method, payload, timeoutMs) {
     const url = new URL(this.apiBase + "/bot" + this.token + "/" + method);
-    const body = Buffer.from(JSON.stringify(payload === undefined ? {} : payload), "utf8");
+    const { body, contentType } = encodeBody(payload);
     const transport = url.protocol === "http:" ? httpRequest : httpsRequest;
     return new Promise((resolve, reject) => {
       const outgoing = transport(
@@ -74,7 +109,7 @@ export class TelegramClient {
           path: url.pathname + url.search,
           method: "POST",
           headers: {
-            "content-type": "application/json",
+            "content-type": contentType,
             "content-length": String(body.length),
             "accept": "application/json",
           },

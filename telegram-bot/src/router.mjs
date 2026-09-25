@@ -8,7 +8,7 @@ import { escapeHtml } from "./telegram.mjs";
 import { INSTRUMENT_LIST, buildResult, getInstrument } from "./instruments.mjs";
 import { applyPayment, checkPreCheckout, ensureTrial, entitlement, invoiceFor } from "./billing.mjs";
 import {
-  formatTimeOfDay, nextDueAfter, parseTimeOfDay, parseUtcOffset, resolveSchedule,
+  DAY_MS, formatTimeOfDay, localDateKey, nextDueAfter, parseTimeOfDay, parseUtcOffset, resolveSchedule,
 } from "./reminders.mjs";
 import {
   aboutText, answerKeyboard, appIntro, appKeyboard, appRejected, appResultSaved, exportMessage,
@@ -16,7 +16,17 @@ import {
   noteSkipped, questionText, reminderStatus, resultMessage, startKeyboard, unknownInput,
   alreadyPro, buyKeyboard, contactUnavailable, helpKeyboard, helpOffer, helpRequestText, paySupport,
   paywall, purchaseThanks, trialNotice, weekdayWords,
+  bookingDraft, bookingExpired, bookingFormatKeyboard, bookingIntro, bookingReady, bookingRequestKeyboard,
+  bookingRequestQuestion, bookingScoresKeyboard, bookingScoresQuestion, bookingTimeKeyboard,
+  bookingTimeQuestion, latestScoreLines, moodDone, moodKeyboard, moodQuestion, moodSaved, moodTagKeyboard,
+  practiceMessage, practicesMenu, practicesMenuKeyboard, practicesMessage, reportCaption, reportEmpty,
+  reportIntro, reportKeyboard, resultKeyboard, sosHint, sosKeyboard, sosMessage,
 } from "./texts.mjs";
+import {
+  BOOKING_FORMATS, BOOKING_TIMES, MAX_BOOKING_REQUEST, MOOD_LOW, MOOD_MAX, MOOD_MIN, bookingOption,
+  getPractice, isSosText, practicesFor,
+} from "./selfhelp.mjs";
+import { buildReport } from "./report.mjs";
 import { parseWebAppPayload } from "./webapp.mjs";
 
 const HTML = { parse_mode: "HTML" };
@@ -37,11 +47,17 @@ function ack(callbackQueryId, text) {
   return { method: "answerCallbackQuery", payload };
 }
 
-function editText(chatId, messageId, text) {
+function editText(chatId, messageId, text, keyboard) {
   return {
     method: "editMessageText",
-    payload: Object.assign({ chat_id: chatId, message_id: messageId, text, reply_markup: { inline_keyboard: [] } }, HTML),
+    payload: Object.assign({
+      chat_id: chatId, message_id: messageId, text, reply_markup: keyboard || { inline_keyboard: [] },
+    }, HTML),
   };
+}
+
+function editKeyboard(chatId, messageId, keyboard) {
+  return { method: "editMessageReplyMarkup", payload: { chat_id: chatId, message_id: messageId, reply_markup: keyboard } };
 }
 
 // "/remind@my_bot on" becomes { command: "remind", args: "on" }.
@@ -68,10 +84,19 @@ export function createRouter(context) {
 
   // The schedule, not a bare offset: it carries the weekday, the time and
   // either a zone or a fixed offset, and dates resolve their own offset.
+  // The window has no configuration of its own, so what it may show travels
+  // in the launch URL: whether full access is on (a hint only, the bot checks
+  // again), and the public contact for the "Мені зараз погано" screen.
   function appUrl(state) {
     if (!config.webappUrl) return null;
     const separator = config.webappUrl.indexOf("?") === -1 ? "?" : "&";
-    return config.webappUrl + separator + "pro=" + (state.active ? "1" : "0");
+    let url = config.webappUrl + separator + "pro=" + (state.active ? "1" : "0");
+    const contact = config.contact;
+    if (contact && contact.username) {
+      url += "&c=" + encodeURIComponent(contact.username);
+      if (contact.name) url += "&cn=" + encodeURIComponent(contact.name);
+    }
+    return url;
   }
 
   function scheduleFor(chatId) {
@@ -93,8 +118,89 @@ export function createRouter(context) {
     if (!contact || !contact.username) return [];
     const requestText = helpRequestText(store, chatId, scheduleFor(chatId));
     return [send(chatId, helpOffer(contact, requestText), {
-      reply_markup: helpKeyboard(contact, requestText),
+      reply_markup: helpKeyboard(contact, requestText, { booking: true }),
     })];
+  }
+
+  // Free for everyone, and answered before anything else a message could mean.
+  function sosActions(chatId) {
+    sessions.clearNote(chatId);
+    sessions.clearBooking(chatId);
+    const keyboard = sosKeyboard(config.contact);
+    return [send(chatId, sosMessage(config.crisisContact, config.contact), keyboard ? { reply_markup: keyboard } : {})];
+  }
+
+  function practicesActions(chatId, key) {
+    return [send(chatId, practicesMessage(practicesFor(key)))];
+  }
+
+  function moodAsk(chatId) {
+    startTrialFor(chatId);
+    const state = access(chatId);
+    if (!state.active) return locked(chatId, state);
+    return [send(chatId, moodQuestion(), { reply_markup: moodKeyboard() })];
+  }
+
+  function weekAverage(chatId) {
+    const since = localDateKey(scheduleFor(chatId), now() - 6 * DAY_MS);
+    const recent = store.moods(chatId).filter((entry) => entry.date >= since);
+    return recent.length ? recent.reduce((sum, entry) => sum + entry.rating, 0) / recent.length : null;
+  }
+
+  function saveMood(chatId, rating, tags) {
+    return store.setMood(chatId, {
+      date: localDateKey(scheduleFor(chatId), now()),
+      rating,
+      tags,
+      at: new Date(now()).toISOString(),
+    });
+  }
+
+  function reportAsk(chatId) {
+    const user = store.hasUser(chatId) ? store.user(chatId) : null;
+    if (!user || (!user.results.length && !user.moods.length)) return [send(chatId, reportEmpty())];
+    return [send(chatId, reportIntro(), { reply_markup: reportKeyboard() })];
+  }
+
+  function reportActions(chatId, includeNotes) {
+    const user = store.hasUser(chatId) ? store.user(chatId) : null;
+    const html = user ? buildReport(user, { schedule: scheduleFor(chatId), includeNotes, nowMs: now() }) : null;
+    if (!html) return [send(chatId, reportEmpty())];
+    const date = localDateKey(scheduleFor(chatId), now());
+    return [{
+      method: "sendDocument",
+      payload: {
+        chat_id: chatId,
+        caption: reportCaption(),
+        document: { filename: "report-" + date + ".html", contentType: "text/html; charset=utf-8", content: html },
+      },
+    }];
+  }
+
+  function bookingStart(chatId) {
+    const contact = config.contact;
+    if (!contact || !contact.username) return [send(chatId, contactUnavailable())];
+    sessions.cancel(chatId);
+    sessions.clearNote(chatId);
+    sessions.startBooking(chatId, now());
+    return [send(chatId, bookingIntro(), { reply_markup: bookingFormatKeyboard() })];
+  }
+
+  function bookingFinish(chatId, booking, includeScores) {
+    sessions.clearBooking(chatId);
+    const contact = config.contact;
+    if (!contact || !contact.username) return [send(chatId, contactUnavailable())];
+    const draft = bookingDraft(booking, includeScores ? latestScoreLines(store, chatId, scheduleFor(chatId)) : []);
+    return [send(chatId, bookingReady(contact, draft), {
+      reply_markup: helpKeyboard(contact, draft, { verb: "Надіслати заявку" }),
+    })];
+  }
+
+  // After the request, ask about scores only when there are some to add.
+  function bookingAfterRequest(chatId, booking) {
+    if (!store.lastResult(chatId, null)) return bookingFinish(chatId, booking, false);
+    sessions.updateBooking(chatId, { step: "scores" }, now());
+    return [send(chatId, bookingScoresQuestion(), { reply_markup: bookingScoresKeyboard() })];
   }
 
   function locked(chatId, state) {
@@ -120,6 +226,7 @@ export function createRouter(context) {
     const state = access(chatId);
     // The two screening scales are always free; sleep and stress are not.
     if (instrument.paid && !state.active) return locked(chatId, state);
+    sessions.clearBooking(chatId);
     const session = sessions.start(chatId, instrument, now());
     return [
       send(chatId, "<b>" + escapeHtml(instrument.title) + "</b>, " + escapeHtml(instrument.subtitle) +
@@ -139,7 +246,9 @@ export function createRouter(context) {
     const schedule = scheduleFor(chatId);
     const needsHelp = result.aboveCutoff || result.risk;
     return [
-      send(chatId, resultMessage(instrument, result, previous, schedule, config.crisisContact)),
+      send(chatId, resultMessage(instrument, result, previous, schedule, config.crisisContact), {
+        reply_markup: resultKeyboard(instrument),
+      }),
     ].concat(needsHelp ? helpActions(chatId) : [], [
       send(chatId, noteQuestion(), { reply_markup: noteKeyboard(pending.id) }),
     ]);
@@ -243,8 +352,11 @@ export function createRouter(context) {
             { extra: trialNotice(state, config.price), remindersActive: state.active }),
           { reply_markup: config.webappUrl ? appKeyboard(appUrl(state)) : startKeyboard(state.active) });
         // Without the app the chat flow is the whole product, so the inline
-        // start buttons stay the entry point.
-        return config.webappUrl ? [hello, send(chatId, appIntro())] : [hello];
+        // start buttons stay the entry point, and a second message carries the
+        // reply keyboard with "Мені зараз погано".
+        return config.webappUrl
+          ? [hello, send(chatId, appIntro())]
+          : [hello, send(chatId, sosHint(), { reply_markup: appKeyboard(null) })];
       }
       case "app":
         if (!config.webappUrl) {
@@ -268,10 +380,22 @@ export function createRouter(context) {
         const offer = helpActions(chatId);
         return offer.length ? offer : [send(chatId, contactUnavailable())];
       }
+      case "mood":
+        return moodAsk(chatId);
+      case "selfhelp":
+        return [send(chatId, practicesMenu(), { reply_markup: practicesMenuKeyboard() })];
+      case "sos":
+        return sosActions(chatId);
+      case "report":
+        return reportAsk(chatId);
+      case "book":
+        return bookingStart(chatId);
       case "cancel": {
         const hadSession = sessions.cancel(chatId);
         const hadNote = sessions.clearNote(chatId);
+        const hadBooking = sessions.clearBooking(chatId);
         if (hadSession) return [send(chatId, "Опитувальник перервано. Відповіді не збережені.")];
+        if (hadBooking) return [send(chatId, "Запис перервано. Почати знову: /book")];
         if (hadNote) return [send(chatId, noteSkipped(), { reply_markup: startKeyboard(access(chatId).active) })];
         return [send(chatId, "Немає чого перервати.")];
       }
@@ -307,6 +431,7 @@ export function createRouter(context) {
           reminderTime: user.reminderTime,
           tzOffsetMinutes: user.tzOffsetMinutes,
           results: user.results,
+          moods: user.moods,
         }))];
       }
       case "delete":
@@ -349,8 +474,35 @@ export function createRouter(context) {
       return {
         actions: [
           send(chatId, appResultSaved(instrument, result)),
-          send(chatId, resultMessage(instrument, result, previous, schedule, config.crisisContact)),
+          send(chatId, resultMessage(instrument, result, previous, schedule, config.crisisContact), {
+            reply_markup: resultKeyboard(instrument),
+          }),
         ].concat(result.aboveCutoff || result.risk ? helpActions(chatId) : []),
+        payload,
+      };
+    }
+
+    if (payload.type === "mood") {
+      startTrialFor(chatId);
+      const state = access(chatId);
+      if (!state.active) return { actions: locked(chatId, state), payload, rejected: "locked" };
+      const entry = saveMood(chatId, payload.rating, payload.tags);
+      const extra = entry.rating <= MOOD_LOW
+        ? { reply_markup: { inline_keyboard: [[{ text: "Що можна зробити зараз", callback_data: "p|mood" }]] } }
+        : {};
+      return { actions: [send(chatId, moodDone(entry, weekAverage(chatId)), extra)], payload };
+    }
+
+    if (payload.type === "report") {
+      return { actions: reportActions(chatId, payload.includeNotes), payload };
+    }
+
+    if (payload.type === "book") {
+      if (!config.contact || !config.contact.username) return { actions: [send(chatId, contactUnavailable())], payload };
+      return {
+        actions: bookingFinish(chatId, {
+          format: payload.format, time: payload.time, request: payload.request,
+        }, payload.scores),
         payload,
       };
     }
@@ -419,7 +571,15 @@ export function createRouter(context) {
     }
     if (message.successful_payment) return handleSuccessfulPayment(chatId, message.successful_payment);
     if (message.web_app_data) return handleWebAppData(chatId, message.web_app_data.data).actions;
+    if (isSosText(text)) return sosActions(chatId);
     if (parsed) return handleCommand(chatId, parsed, message);
+    const booking = sessions.booking(chatId, now());
+    if (booking && booking.step === "request") {
+      const request = text.trim().replace(/\s+/g, " ").slice(0, MAX_BOOKING_REQUEST);
+      if (!request) return [];
+      const updated = sessions.updateBooking(chatId, { request }, now());
+      return bookingAfterRequest(chatId, updated);
+    }
     // An open question is waiting: this message is the answer to it. Checked
     // before the digit shortcut, which needs an active questionnaire anyway.
     // Whitespace is ignored rather than answered with a hint, which would read
@@ -429,7 +589,7 @@ export function createRouter(context) {
     }
     // A bare 0 to 3 answers the current question, which keeps the bot usable
     // when inline keyboards are unavailable.
-    if (/^[0-3]$/.test(text.trim()) && sessions.get(chatId, now())) {
+    if (/^[0-4]$/.test(text.trim()) && sessions.get(chatId, now())) {
       return applyAnswer(chatId, Number(text.trim()), null).actions;
     }
     if (!text) return [];
@@ -483,6 +643,67 @@ export function createRouter(context) {
     }
     if (parts[0] === "pay") {
       return [ack(query.id)].concat(handleInvoice(chatId));
+    }
+    if (parts[0] === "p") {
+      return [ack(query.id)].concat(practicesActions(chatId, parts[1]));
+    }
+    if (parts[0] === "pp") {
+      if (parts[1] === "menu") {
+        return [ack(query.id), send(chatId, practicesMenu(), { reply_markup: practicesMenuKeyboard() })];
+      }
+      const practice = getPractice(parts[1]);
+      return practice ? [ack(query.id), send(chatId, practiceMessage(practice))] : [ack(query.id)];
+    }
+    if (parts[0] === "m") {
+      if (parts[1] === "ask") return [ack(query.id)].concat(moodAsk(chatId));
+      const rating = Number(parts[1]);
+      if (!Number.isInteger(rating) || rating < MOOD_MIN || rating > MOOD_MAX) return [ack(query.id)];
+      startTrialFor(chatId);
+      const state = access(chatId);
+      if (!state.active) return [ack(query.id)].concat(locked(chatId, state));
+      const entry = saveMood(chatId, rating);
+      const saved = message.message_id
+        ? editText(chatId, message.message_id, moodSaved(entry), moodTagKeyboard(entry))
+        : send(chatId, moodSaved(entry), { reply_markup: moodTagKeyboard(entry) });
+      return [ack(query.id, "Збережено"), saved];
+    }
+    if (parts[0] === "mt") {
+      const entry = store.toggleMoodTag(chatId, parts[1], parts[2]);
+      if (!entry || !message.message_id) return [ack(query.id)];
+      return [ack(query.id), editKeyboard(chatId, message.message_id, moodTagKeyboard(entry))];
+    }
+    if (parts[0] === "md") {
+      const entry = store.moodOn(chatId, parts[1]);
+      if (!entry) return [ack(query.id)];
+      const done = moodDone(entry, weekAverage(chatId));
+      return [ack(query.id), message.message_id ? editText(chatId, message.message_id, done) : send(chatId, done)];
+    }
+    if (parts[0] === "rep") {
+      if (parts[1] === "ask") return [ack(query.id)].concat(reportAsk(chatId));
+      return [ack(query.id, "Готую звіт")].concat(reportActions(chatId, parts[1] === "notes"));
+    }
+    if (parts[0] === "b") {
+      if (parts[1] === "start") return [ack(query.id)].concat(bookingStart(chatId));
+      const booking = sessions.booking(chatId, now());
+      if (!booking) return [ack(query.id), send(chatId, bookingExpired())];
+      if (parts[1] === "f" && booking.step === "format" && bookingOption(BOOKING_FORMATS, parts[2])) {
+        sessions.updateBooking(chatId, { format: parts[2], step: "time" }, now());
+        const next = bookingTimeQuestion();
+        return [ack(query.id), message.message_id
+          ? editText(chatId, message.message_id, next, bookingTimeKeyboard())
+          : send(chatId, next, { reply_markup: bookingTimeKeyboard() })];
+      }
+      if (parts[1] === "t" && booking.step === "time" && bookingOption(BOOKING_TIMES, parts[2])) {
+        sessions.updateBooking(chatId, { time: parts[2], step: "request" }, now());
+        return [ack(query.id), send(chatId, bookingRequestQuestion(), { reply_markup: bookingRequestKeyboard() })];
+      }
+      if (parts[1] === "r" && booking.step === "request") {
+        return [ack(query.id)].concat(bookingAfterRequest(chatId, booking));
+      }
+      if (parts[1] === "s" && booking.step === "scores") {
+        return [ack(query.id)].concat(bookingFinish(chatId, booking, parts[2] === "yes"));
+      }
+      return [ack(query.id)];
     }
     if (parts[0] === "n") {
       const pending = sessions.pendingNote(chatId, now());

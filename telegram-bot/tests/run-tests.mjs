@@ -16,9 +16,13 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
 import {
-  GAD7, INSTRUMENT_LIST, PHQ9, SLEEP, STRESS, bandOf, buildResult, interpretResult, itemContribution,
-  scoreAnswers, severityOf, riskFlagged,
+  GAD7, INSTRUMENT_LIST, PCL5, PHQ9, SLEEP, STRESS, WELLBEING, bandOf, buildResult, interpretResult,
+  itemContribution, scoreAnswers, severityOf, riskFlagged,
 } from "../src/instruments.mjs";
+import {
+  MOOD_TAGS, PRACTICE_IDS, PRACTICES, SOS_BUTTON, isSosText, practicesFor,
+} from "../src/selfhelp.mjs";
+import { REPORT_COLORS, buildReport } from "../src/report.mjs";
 import {
   applyPayment, checkPreCheckout, ensureTrial, entitlement, invoiceFor, isPro,
 } from "../src/billing.mjs";
@@ -30,11 +34,11 @@ import {
   parseUtcOffset, resolveSchedule, zoneOffsetMinutes,
 } from "../src/reminders.mjs";
 import { createRouter, parseAnswerCallback, parseCommand } from "../src/router.mjs";
-import { TelegramClient, TelegramError, escapeHtml } from "../src/telegram.mjs";
+import { TelegramClient, TelegramError, encodeBody, escapeHtml } from "../src/telegram.mjs";
 import { DEFAULT_CRISIS_CONTACT, loadConfig, parseEnvFile } from "../src/config.mjs";
 import { BotRuntime, buildBot } from "../bot.mjs";
 import { MAX_PAYLOAD_BYTES, parseWebAppPayload } from "../src/webapp.mjs";
-import { COPY, SOURCE, isCurrent } from "../webapp/build.mjs";
+import { SHARED, isCurrent, staleCopies } from "../webapp/build.mjs";
 import { historyMessage, lastMessage, weeklyReminder } from "../src/texts.mjs";
 
 const filter = process.argv[2] || "";
@@ -307,6 +311,416 @@ test("instruments: interpretResult keeps band wording unless risk outranks a low
     const instrument = result.instrument === "gad7" ? GAD7 : PHQ9;
     assert.doesNotMatch(interpretResult(instrument, result).support, /[\u2013\u2014]/, "no en or em dash");
   });
+});
+
+// --------------------------------------------------------------- new scales
+
+test("instruments: PCL-5 has twenty 0 to 4 items, an 80 point maximum and the cutoff of 33", () => {
+  assert.equal(PCL5.items.length, 20);
+  assert.equal(PCL5.maxScore, 80);
+  assert.equal(scoreAnswers(PCL5, new Array(20).fill(4)), 80);
+  assert.equal(PCL5.cutoff, 33);
+  assert.equal(PCL5.paid, true);
+  assert.equal(PCL5.caveat, undefined, "a published instrument carries no own-scale caveat");
+  assert.equal(buildResult(PCL5, new Array(20).fill(0).map((_, i) => (i < 16 ? 2 : 0)), WED_NOON_UTC).aboveCutoff, false);
+  const at = (score) => severityOf(PCL5, score);
+  assert.equal(at(32), "прояви нижче порогу");
+  assert.equal(at(33), "виражені прояви посттравматичного стресу");
+  assert.match(PCL5.prompt, /останнього місяця/);
+});
+
+test("instruments: the wellbeing scale is the bot's own, and on it a low score is the worrying side", () => {
+  assert.equal(WELLBEING.items.length, 6);
+  assert.equal(WELLBEING.maxScore, 24);
+  assert.equal(WELLBEING.higherIsBetter, true);
+  assert.match(WELLBEING.caveat, /не валідований опитувальник/);
+  // No item restates WHO-5, whose licence rules out a paid product.
+  const who5 = /бадьор|спокійн|розслаб|свіж|відпочил|цікав/i;
+  WELLBEING.items.forEach((item) => assert.doesNotMatch(item.text, who5, item.text));
+  const low = buildResult(WELLBEING, [1, 1, 1, 1, 2, 2], WED_NOON_UTC);
+  assert.equal(low.score, 8);
+  assert.equal(low.aboveCutoff, true, "at the cutoff counts as crossing it");
+  assert.match(interpretResult(WELLBEING, low).advice, /не вище порогу 8\. Це підстава обговорити/);
+  assert.match(interpretResult(WELLBEING, low).support, /Не лякайтеся/);
+  const good = buildResult(WELLBEING, [3, 3, 3, 3, 3, 3], WED_NOON_UTC);
+  assert.equal(good.aboveCutoff, false);
+  assert.match(interpretResult(WELLBEING, good).advice, /вище порогу 8\. Продовжуйте/);
+  assert.equal(good.severity, "добре самопочуття");
+});
+
+test("router: a low wellbeing score offers the route to a person, like a high one elsewhere", () => {
+  const h = harness({ config: { contact: { username: "helper_psy", name: "Олексій", role: "психолог" } } });
+  h.say("/start");
+  const finished = completeViaKeyboard(h, WELLBEING, [0, 1, 1, 1, 1, 1]);
+  assert.match(scoreText(finished), /низьке самопочуття/);
+  assert.ok(textsOf(finished).some((text) => /Можна не розбиратися з цим самому/.test(text)));
+});
+
+test("router: PCL-5 runs through the keyboard during the trial and locks after it", () => {
+  const h = harness();
+  h.say("/start");
+  const finished = completeViaKeyboard(h, PCL5, new Array(20).fill(2));
+  assert.match(scoreText(finished), /Бали: <b>40<\/b> з 80/);
+  assert.match(scoreText(finished), /виражені прояви посттравматичного стресу/);
+  h.clock.now += 15 * DAY_MS;
+  assert.match(lastText(h.say("/pcl5")), /Повний доступ/);
+});
+
+// --------------------------------------------------------------- self-help
+
+test("selfhelp: every scale and the mood check-in have two practices of their own", () => {
+  INSTRUMENT_LIST.map((instrument) => instrument.id).concat(["mood"]).forEach((key) => {
+    const practices = practicesFor(key);
+    assert.equal(practices.length, 2, key);
+    practices.forEach((practice) => assert.ok(PRACTICES[practice.id], key + " " + practice.id));
+  });
+  PRACTICE_IDS.forEach((id) => {
+    const text = PRACTICES[id].title + " " + PRACTICES[id].steps.join(" ");
+    assert.doesNotMatch(text, /[–—]/, "no en or em dash in " + id);
+  });
+});
+
+test("selfhelp: every result carries a practices button, and it answers for that scale", () => {
+  const h = harness();
+  h.say("/start");
+  const finished = completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
+  const scored = finished.find((action) => action.payload && /Бали:/.test(action.payload.text || ""));
+  assert.deepEqual(scored.payload.reply_markup.inline_keyboard[0][0].callback_data, "p|gad7");
+  const answer = h.tap("p|gad7");
+  assert.match(lastText(answer), /Дихання 4-6/);
+  assert.match(lastText(answer), /Заземлення 5-4-3-2-1/);
+  // /selfhelp lists all of them, each one opens on its own.
+  const menu = h.say("/selfhelp");
+  const ids = menu[0].payload.reply_markup.inline_keyboard.flat().map((button) => button.callback_data);
+  assert.deepEqual(ids, PRACTICE_IDS.map((id) => "pp|" + id));
+  assert.match(lastText(h.tap("pp|sleep")), /Підготовка до сну/);
+});
+
+test("selfhelp: practices stay free after the trial", () => {
+  const h = harness();
+  h.say("/start");
+  h.clock.now += 30 * DAY_MS;
+  assert.match(lastText(h.tap("p|phq9")), /Маленька приємна справа/);
+  assert.match(lastText(h.say("/selfhelp")), /Техніки самодопомоги/);
+});
+
+// --------------------------------------------------------------- SOS
+
+test("sos: the button text and /sos answer with steps, emergency numbers first, then the contact", () => {
+  const h = harness({ config: { contact: { username: "helper_psy", name: "Олексій", role: "психолог" } } });
+  assert.ok(isSosText(SOS_BUTTON));
+  assert.ok(isSosText("Мені зараз погано"));
+  [h.say(SOS_BUTTON), h.say("/sos")].forEach((actions) => {
+    const text = lastText(actions);
+    assert.match(text, /Ви не самі/);
+    assert.match(text, /Вдих носом на 4 рахунки/);
+    assert.ok(text.indexOf("103 або 112") !== -1);
+    assert.ok(text.indexOf("7333") !== -1, "the crisis contact list is included");
+    assert.ok(text.indexOf("103 або 112") < text.indexOf("Олексій"), "emergency services come first");
+    assert.equal(actions[0].payload.reply_markup.inline_keyboard[0][0].url, "https://t.me/helper_psy");
+  });
+});
+
+test("sos: free after the trial, and it never ends up saved as a weekly note", () => {
+  const h = harness();
+  h.say("/start");
+  completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
+  assert.equal(h.sessions.pendingNoteCount(), 1, "the note question is open");
+  assert.match(lastText(h.say(SOS_BUTTON)), /Ви не самі/);
+  assert.equal(h.sessions.pendingNoteCount(), 0, "SOS closes the note question");
+  assert.equal(h.store.lastResult(777, "gad7").note, undefined);
+  h.clock.now += 30 * DAY_MS;
+  assert.match(lastText(h.say("/sos")), /Ви не самі/);
+  // No contact configured: the steps and the numbers, and no personal button.
+  assert.equal(h.say("/sos")[0].payload.reply_markup, undefined);
+});
+
+// --------------------------------------------------------------- mood
+
+test("mood: one tap saves today's check-in, tags toggle, done shows the weekly average", () => {
+  const h = harness();
+  h.say("/start");
+  const asked = h.say("/mood");
+  assert.deepEqual(asked[0].payload.reply_markup.inline_keyboard.flat().map((b) => b.callback_data),
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => "m|" + n));
+  const saved = h.tap("m|7");
+  const edited = saved.find((action) => action.method === "editMessageText");
+  assert.match(edited.payload.text, /Настрій сьогодні: <b>7<\/b> з 10\. Збережено/);
+  // Wednesday noon UTC is 15:00 in Kyiv, same calendar day.
+  assert.deepEqual(h.store.moods(777).map((entry) => [entry.date, entry.rating]), [["2026-09-16", 7]]);
+  const tagged = h.tap("mt|2026-09-16|work");
+  const markup = tagged.find((action) => action.method === "editMessageReplyMarkup").payload.reply_markup;
+  assert.match(markup.inline_keyboard[0][1].text, /^✓ Робота/);
+  assert.deepEqual(h.store.moods(777)[0].tags, ["work"]);
+  h.tap("mt|2026-09-16|work");
+  assert.deepEqual(h.store.moods(777)[0].tags, [], "a second tap clears the tag");
+  h.tap("mt|2026-09-16|sleep");
+  const done = h.tap("md|2026-09-16").find((action) => action.method === "editMessageText");
+  assert.match(done.payload.text, /7<\/b> з 10 · Сон\./);
+  assert.match(done.payload.text, /Середнє за останні 7 днів: 7,0/);
+});
+
+test("mood: a second check-in the same day replaces the first, a new day adds a row", () => {
+  const h = harness();
+  h.say("/start");
+  h.tap("m|3");
+  h.tap("m|6");
+  assert.deepEqual(h.store.moods(777).map((entry) => entry.rating), [6]);
+  h.clock.now += DAY_MS;
+  h.tap("m|8");
+  assert.deepEqual(h.store.moods(777).map((entry) => entry.date), ["2026-09-16", "2026-09-17"]);
+  // 21:30 UTC is already the next day in Kyiv, UTC+3 in the fixture.
+  h.clock.now = Date.parse("2026-09-17T21:30:00Z");
+  h.tap("m|5");
+  assert.equal(h.store.moods(777)[2].date, "2026-09-18");
+});
+
+test("mood: a low rating offers practices, a very low one points to SOS", () => {
+  const h = harness();
+  h.say("/start");
+  const low = h.tap("m|4").find((action) => action.method === "editMessageText");
+  assert.ok(low.payload.reply_markup.inline_keyboard.flat().some((b) => b.callback_data === "p|mood"));
+  const crisis = h.tap("m|2").find((action) => action.method === "editMessageText");
+  assert.match(crisis.payload.text, /\/sos/);
+  const fine = h.tap("m|8").find((action) => action.method === "editMessageText");
+  assert.ok(!fine.payload.reply_markup.inline_keyboard.flat().some((b) => b.callback_data === "p|mood"));
+});
+
+test("mood: part of the full access, locked after the trial", () => {
+  const h = harness();
+  h.say("/start");
+  h.clock.now += 15 * DAY_MS;
+  assert.match(lastText(h.say("/mood")), /Повний доступ/);
+  assert.match(lastText(h.tap("m|7")), /Повний доступ/);
+  assert.equal(h.store.moods(777).length, 0);
+  grantAccess(h.store, 777, h.clock.now);
+  h.tap("m|7");
+  assert.equal(h.store.moods(777).length, 1);
+});
+
+test("mood: /export and /delete cover the check-ins too", () => {
+  const h = harness();
+  h.say("/start");
+  h.tap("m|7");
+  assert.match(lastText(h.say("/export")), /&quot;rating&quot;: 7|"rating": 7/);
+  h.tap("del|yes");
+  assert.equal(h.store.moods(777).length, 0);
+});
+
+test("mood: a hand-edited snapshot keeps only well-formed check-ins", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mood-"));
+  try {
+    const file = join(dir, "results.json");
+    writeFileSync(file, JSON.stringify({
+      version: 1, offset: 0, users: {
+        5: {
+          results: [],
+          moods: [
+            { date: "2026-09-10", rating: 5, tags: ["work", "bogus", "work"] },
+            { date: "10.09.2026", rating: 5 },
+            { date: "2026-09-11", rating: 11 },
+            { date: "2026-09-09", rating: 1 },
+          ],
+        },
+      },
+    }));
+    const store = new Store({ file });
+    store.load();
+    assert.deepEqual(store.moods(5).map((entry) => [entry.date, entry.rating, entry.tags]),
+      [["2026-09-09", 1, []], ["2026-09-10", 5, ["work"]]]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --------------------------------------------------------------- report
+
+function reportUser() {
+  return {
+    results: [
+      { instrument: "gad7", score: 12, maxScore: 21, severity: "помірна тривога", completedAt: "2026-09-01T10:00:00Z",
+        note: "<b>важкий</b> тиждень & безсоння" },
+      { instrument: "gad7", score: 8, maxScore: 21, severity: "легка тривога", completedAt: "2026-09-15T10:00:00Z" },
+      { instrument: "stress", score: 22, maxScore: 32, severity: "високий рівень напруження",
+        completedAt: "2026-09-15T11:00:00Z" },
+    ],
+    moods: [{ date: "2026-09-14", rating: 4, tags: ["work"] }, { date: "2026-09-15", rating: 6, tags: ["work", "sleep"] }],
+  };
+}
+
+test("report: one section per scale taken, notes only on request and always escaped", () => {
+  const schedule = { zone: null, offsetMinutes: 180, weekday: 1, time: "19:00" };
+  const withNotes = buildReport(reportUser(), { schedule, includeNotes: true, nowMs: WED_NOON_UTC });
+  assert.match(withNotes, /^<!DOCTYPE html>/);
+  assert.match(withNotes, /Звіт самоспостереження/);
+  assert.match(withNotes, /Період: з 01\.09\.2026 по 15\.09\.2026/);
+  assert.match(withNotes, />GAD-7: <span class="sub">скринінг тривоги/);
+  assert.match(withNotes, /Останній результат: <b>8 з 21<\/b>, легка тривога/);
+  assert.doesNotMatch(withNotes, />PHQ-9:/, "a scale never taken gets no section");
+  assert.ok(withNotes.indexOf("&lt;b&gt;важкий&lt;/b&gt; тиждень &amp; безсоння") !== -1, "the note is escaped");
+  assert.doesNotMatch(withNotes, /<b>важкий<\/b>/);
+  assert.match(withNotes, /Це власна шкала самоспостереження/, "the own scale keeps its caveat");
+  assert.match(withNotes, /Настрій: <span class="sub">/);
+  assert.match(withNotes, /Що найчастіше впливало: Робота \(2\), Сон \(1\)/);
+  assert.equal((withNotes.match(/<svg /g) || []).length, 3, "one chart per scale plus the mood chart");
+  const plain = buildReport(reportUser(), { schedule, includeNotes: false, nowMs: WED_NOON_UTC });
+  assert.doesNotMatch(plain, /важкий/);
+  assert.doesNotMatch(plain, /Нотатка про тиждень/);
+  assert.equal(buildReport({ results: [], moods: [] }, { schedule }), null);
+});
+
+test("report: every scale wears the same colour in the report as in the app", () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const html = readFileSync(join(here, "..", "webapp", "index.html"), "utf8");
+  const light = html.slice(0, html.indexOf("@media (prefers-color-scheme: dark)"));
+  Object.keys(REPORT_COLORS).forEach((id) => {
+    assert.match(light, new RegExp("--series-" + id + ": " + REPORT_COLORS[id] + ";"), id);
+  });
+  INSTRUMENT_LIST.forEach((instrument) => assert.ok(REPORT_COLORS[instrument.id], instrument.id));
+});
+
+test("report: /report asks about notes, then sends an HTML document, free after the trial", () => {
+  const h = harness();
+  assert.match(lastText(h.say("/report")), /Поки немає даних/);
+  h.say("/start");
+  completeViaKeyboard(h, GAD7, [2, 2, 2, 2, 2, 2, 2]);
+  h.say("тиждень <без> сну");
+  h.clock.now += 30 * DAY_MS;
+  const asked = h.say("/report");
+  assert.deepEqual(asked[0].payload.reply_markup.inline_keyboard[0].map((b) => b.callback_data), ["rep|notes", "rep|plain"]);
+  const sent = h.tap("rep|notes").find((action) => action.method === "sendDocument");
+  assert.equal(sent.payload.chat_id, 777);
+  assert.match(sent.payload.document.filename, /^report-\d{4}-\d{2}-\d{2}\.html$/);
+  assert.match(sent.payload.document.contentType, /^text\/html/);
+  assert.ok(sent.payload.document.content.indexOf("тиждень &lt;без&gt; сну") !== -1);
+  const plain = h.tap("rep|plain").find((action) => action.method === "sendDocument");
+  assert.equal(plain.payload.document.content.indexOf("без&gt; сну"), -1);
+});
+
+test("telegram: a document upload goes out as multipart with the file and JSON-encoded fields", async () => {
+  const encoded = encodeBody({ chat_id: 5, reply_markup: { inline_keyboard: [] },
+    document: { filename: "звіт report.html", contentType: "text/html; charset=utf-8", content: "<p>привіт</p>" } });
+  assert.match(encoded.contentType, /^multipart\/form-data; boundary=/);
+  const text = encoded.body.toString("utf8");
+  assert.match(text, /name="document"; filename="_____report\.html"/, "the filename is reduced to safe ASCII");
+  assert.match(text, /<p>привіт<\/p>/);
+  assert.match(text, /name="reply_markup"\r\n\r\n\{"inline_keyboard":\[\]\}/);
+  assert.equal(encodeBody({ a: 1 }).contentType, "application/json");
+
+  let seen = null;
+  const { server, port } = await startServer((request, response, body) => {
+    seen = { type: request.headers["content-type"], length: Number(request.headers["content-length"]), body };
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ ok: true, result: { message_id: 3 } }));
+  });
+  try {
+    const client = new TelegramClient({ token: FAKE_TOKEN, apiBase: "http://127.0.0.1:" + port });
+    await client.call("sendDocument", { chat_id: 5, document: { filename: "r.html", content: "<p>x</p>" } });
+    assert.match(seen.type, /^multipart\/form-data; boundary=----tgbot/);
+    assert.equal(seen.length, Buffer.byteLength(seen.body, "utf8"));
+    assert.match(seen.body, /filename="r\.html"/);
+  } finally {
+    await closeServer(server);
+  }
+});
+
+// --------------------------------------------------------------- booking
+
+const BOOKING_CONTACT = { username: "helper_psy", name: "Олексій", role: "психолог" };
+
+function draftFrom(actions) {
+  const button = actions.find((action) => action.payload && action.payload.reply_markup &&
+    action.payload.reply_markup.inline_keyboard)?.payload.reply_markup.inline_keyboard[0][0];
+  return { button, text: decodeURIComponent(button.url.split("?text=")[1]) };
+}
+
+test("booking: format, time, request and scores become a draft the person sends themselves", () => {
+  const h = harness({ config: { contact: BOOKING_CONTACT } });
+  h.say("/start");
+  completeViaKeyboard(h, GAD7, [2, 2, 2, 2, 2, 2, 2]);
+  const intro = h.say("/book");
+  assert.equal(h.sessions.pendingNoteCount(), 0, "starting a booking closes the note question");
+  assert.deepEqual(intro[0].payload.reply_markup.inline_keyboard.flat().map((b) => b.callback_data),
+    ["b|f|online", "b|f|offline", "b|f|any"]);
+  const time = h.tap("b|f|online").find((action) => action.method === "editMessageText");
+  assert.match(time.payload.text, /Коли Вам зручно/);
+  assert.match(lastText(h.tap("b|t|evening")), /З чим хотіли б попрацювати/);
+  assert.match(lastText(h.say("тривога   перед\nсном")), /Додати до повідомлення Ваші останні результати/);
+  const done = h.tap("b|s|yes");
+  const { button, text } = draftFrom(done);
+  assert.equal(button.text, "Надіслати заявку: Олексій");
+  assert.match(button.url, /^https:\/\/t\.me\/helper_psy\?text=/);
+  assert.match(text, /^Вітаю! Хочу записатися на консультацію\.\nФормат: онлайн\nЗручний час: вечір\nЗапит: тривога перед сном/);
+  assert.match(text, /Мої останні результати:\nGAD-7 \(скринінг тривоги\): 14 з 21, помірна тривога/);
+  assert.match(lastText(done), /надішлете самі/);
+  assert.equal(h.sessions.pendingBookingCount(), 0);
+  assert.equal(h.store.lastResult(777, "gad7").note, undefined, "the request is not a weekly note");
+});
+
+test("booking: without results the scores question is skipped, and the request can be skipped too", () => {
+  const h = harness({ config: { contact: BOOKING_CONTACT } });
+  h.say("/book");
+  h.tap("b|f|any");
+  h.tap("b|t|weekend");
+  const { text } = draftFrom(h.tap("b|r|skip"));
+  assert.equal(text, "Вітаю! Хочу записатися на консультацію.\nФормат: ще не знаю\nЗручний час: вихідні");
+});
+
+test("booking: no contact, stale taps and /cancel are handled", () => {
+  assert.match(lastText(harness().say("/book")), /не налаштований/);
+  const h = harness({ config: { contact: BOOKING_CONTACT } });
+  assert.match(lastText(h.tap("b|t|day")), /Почати знову: \/book/);
+  h.say("/book");
+  // A time tap before the format is answered changes nothing.
+  h.tap("b|t|day");
+  assert.equal(h.sessions.booking(777, h.clock.now).step, "format");
+  assert.match(lastText(h.say("/cancel")), /Запис перервано/);
+  assert.equal(h.sessions.pendingBookingCount(), 0);
+});
+
+test("booking: the help offer carries a booking button", () => {
+  const h = harness({ config: { contact: BOOKING_CONTACT } });
+  h.say("/start");
+  const finished = completeViaKeyboard(h, GAD7, [2, 2, 2, 2, 2, 2, 2]);
+  const offer = finished.find((action) => /Можна не розбиратися/.test(action.payload.text || ""));
+  assert.deepEqual(offer.payload.reply_markup.inline_keyboard[1], [{ text: "Записатися на консультацію", callback_data: "b|start" }]);
+});
+
+// --------------------------------------------------------------- app payloads
+
+function appSend(h, data) {
+  return h.router.handleUpdate({
+    update_id: 30, message: { message_id: 1, chat: h.chat, web_app_data: { data: JSON.stringify(Object.assign({ v: 1 }, data)) } },
+  });
+}
+
+test("webapp: mood, report and booking payloads are validated field by field", () => {
+  assert.equal(parseWebAppPayload(JSON.stringify({ v: 1, type: "mood", rating: 7, tags: ["work", "work"] })).payload.tags.length, 1);
+  assert.equal(parseWebAppPayload(JSON.stringify({ v: 1, type: "mood", rating: 11 })).ok, false);
+  assert.equal(parseWebAppPayload(JSON.stringify({ v: 1, type: "mood", rating: 5, tags: ["hack"] })).ok, false);
+  assert.equal(parseWebAppPayload(JSON.stringify({ v: 1, type: "report", notes: "yes" })).payload.includeNotes, false);
+  assert.equal(parseWebAppPayload(JSON.stringify({ v: 1, type: "book", format: "online", time: "never" })).ok, false);
+  const long = parseWebAppPayload(JSON.stringify({ v: 1, type: "book", format: "online", time: "day", request: "а ".repeat(400) }));
+  assert.equal(long.payload.request.length, 300);
+});
+
+test("webapp: a mood from the app is stored, a report is sent, a booking becomes a draft", () => {
+  const h = harness({ config: { contact: BOOKING_CONTACT } });
+  h.say("/start");
+  assert.match(lastText(appSend(h, { type: "mood", rating: 3, tags: ["news"] })), /3<\/b> з 10 · Новини/);
+  assert.deepEqual(h.store.moods(777)[0].tags, ["news"]);
+  const sent = appSend(h, { type: "report", notes: false });
+  assert.equal(sent[0].method, "sendDocument");
+  const { text } = draftFrom(appSend(h, { type: "book", format: "offline", time: "morning", request: "сон", scores: false }));
+  assert.equal(text, "Вітаю! Хочу записатися на консультацію.\nФормат: очно\nЗручний час: ранок\nЗапит: сон");
+  h.clock.now += 30 * DAY_MS;
+  assert.match(lastText(appSend(h, { type: "mood", rating: 5 })), /Повний доступ/);
+});
+
+test("webapp: the launch URL carries the public contact for the SOS screen", () => {
+  const h = harness({ config: { webappUrl: "https://example.pages.dev/", contact: BOOKING_CONTACT } });
+  const url = h.say("/start")[0].payload.reply_markup.keyboard[0][0].web_app.url;
+  assert.equal(url, "https://example.pages.dev/?pro=1&c=helper_psy&cn=" + encodeURIComponent("Олексій"));
 });
 
 // --------------------------------------------------------------- billing
@@ -796,7 +1210,9 @@ test("router: command parsing tolerates a bot mention and arguments", () => {
 test("router: /start greets, registers the user, and offers both instruments", () => {
   const h = harness();
   const actions = h.say("/start");
-  assert.deepEqual(methodsOf(actions), ["sendMessage"]);
+  // The greeting, then the reply keyboard that keeps "Мені зараз погано" in reach.
+  assert.deepEqual(methodsOf(actions), ["sendMessage", "sendMessage"]);
+  assert.deepEqual(actions[1].payload.reply_markup.keyboard, [[{ text: "🆘 Мені зараз погано" }]]);
   const text = actions[0].payload.text;
   assert.match(text, /Тест/);
   assert.match(text, /GAD-7/);
@@ -848,14 +1264,16 @@ test("router: a stale answer tap is acknowledged without changing the session", 
   assert.deepEqual(h.sessions.get(777, h.clock.now).answers, [2]);
 });
 
-test("router: a bare digit answers the current question and 4 is refused", () => {
+test("router: a bare digit answers the current question and an out-of-range one is refused", () => {
   const h = harness();
   h.say("/gad7");
   const advanced = h.say("2");
   assert.match(lastText(advanced), /Питання 2 з 7/);
   assert.deepEqual(h.sessions.get(777, h.clock.now).answers, [2]);
-  // Out of range digits are not answers, so they fall through to the hint.
-  assert.match(lastText(h.say("4")), /Не зрозумів команду/);
+  // 4 is a valid answer on the 0 to 4 scales, so on a 0 to 3 item it is named
+  // as out of range rather than treated as unknown text.
+  assert.match(lastText(h.say("4")), /від 0 до 3/);
+  assert.match(lastText(h.say("5")), /Не зрозумів команду/);
   assert.equal(h.sessions.get(777, h.clock.now).answers.length, 1);
 });
 
@@ -1222,7 +1640,7 @@ test("paywall: /start opens a trial and says how long it lasts", () => {
   // The locked scales are marked in the keyboard, not hidden.
   const rows = started[0].payload.reply_markup.inline_keyboard;
   assert.deepEqual(rows[0].map((b) => b.callback_data), ["s|gad7", "s|phq9"]);
-  assert.deepEqual(rows[1].map((b) => b.callback_data), ["s|sleep", "s|stress"]);
+  assert.deepEqual(rows[1].map((b) => b.callback_data), ["s|sleep", "s|stress", "s|pcl5", "s|wellbeing"]);
   assert.doesNotMatch(rows[1][0].text, /🔒/, "nothing is locked during the trial");
 });
 
@@ -1566,10 +1984,11 @@ test("contact: the username defaults to the owner's account and is validated", (
 
 // --------------------------------------------------------------- mini app
 
-test("webapp: the app's copy of the questionnaires is identical to the bot's", () => {
-  assert.equal(isCurrent(), true,
-    "run node telegram-bot/webapp/build.mjs after changing src/instruments.mjs");
-  assert.equal(readFileSync(COPY, "utf8"), readFileSync(SOURCE, "utf8"));
+test("webapp: the app's copies of the shared definitions are identical to the bot's", () => {
+  assert.deepEqual(staleCopies(), [], "run node telegram-bot/webapp/build.mjs after changing a shared file in src/");
+  assert.equal(isCurrent(), true);
+  assert.deepEqual(SHARED.map((entry) => entry.name), ["instruments.mjs", "selfhelp.mjs"]);
+  SHARED.forEach((entry) => assert.equal(readFileSync(entry.copy, "utf8"), readFileSync(entry.source, "utf8")));
 });
 
 test("webapp: the page and its script exist and reference each other", () => {
@@ -1603,6 +2022,26 @@ test("webapp: the result screen describes, supports, and keeps the own-scale cav
   assert.match(app, /caveat\.hidden = !instrument\.caveat/);
   // The texts come from the shared definitions, never restated in the app.
   assert.doesNotMatch(app, /майже не турбує|Не лякайтеся|не валідований|Бал вище порогу/);
+});
+
+test("webapp: the new screens exist, SOS comes first, and their texts come from the shared module", () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const html = readFileSync(join(here, "..", "webapp", "index.html"), "utf8");
+  const app = readFileSync(join(here, "..", "webapp", "app.js"), "utf8");
+  ["sos", "mood", "practices", "report", "booking"].forEach((id) => {
+    assert.match(html, new RegExp('<div id="' + id + '" class="screen">'), id);
+  });
+  const menu = html.slice(html.indexOf('id="home-menu"'));
+  assert.ok(menu.indexOf('data-go="sos"') < menu.indexOf('id="scale-anchor"'), "SOS sits above the scales");
+  assert.match(html, /\[hidden\] \{ display: none !important; \}/, "hidden cards stay hidden despite .menu-item");
+  assert.match(html, /<button class="menu-item" data-go="booking" id="booking-card" hidden>/);
+  assert.match(app, /from "\.\/selfhelp\.mjs"/);
+  assert.doesNotMatch(app, /Дихання 4-6|Заземлення|Ви не самі|Ще не знаю/, "the app restates no shared text");
+  // The contact from the launch URL is checked before it becomes a link.
+  assert.match(app, /\/\^\[A-Za-z0-9_\]\{4,32\}\$\/\.test\(PARAMS\.get\("c"\)/);
+  // Emergency numbers are in the page itself, so the screen works offline of the bot.
+  assert.match(html, /href="tel:103"/);
+  assert.match(html, /href="tel:7333"/);
 });
 
 test("webapp: a well formed result payload is accepted and normalized", () => {
@@ -1785,14 +2224,16 @@ test("webapp: /start offers the launch button only when a URL is configured", ()
   // The lock state rides along in the query string as a hint for the window.
   assert.equal(keyboard[0][0].web_app.url, "https://example.pages.dev/?pro=1");
   assert.match(keyboard[0][0].text, /Відкрити застосунок/);
+  assert.deepEqual(keyboard[1], [{ text: "🆘 Мені зараз погано" }], "the SOS button sits under the app button");
   assert.equal(started[0].payload.reply_markup.is_persistent, true);
   assert.match(lastText(started), /вікно поверх чату/);
   assert.match(lastText(withApp.say("/app")), /Відкрити застосунок/);
 
   const chatOnly = harness();
   const plain = chatOnly.say("/start");
-  assert.equal(plain.length, 1);
+  assert.equal(plain.length, 2);
   assert.ok(plain[0].payload.reply_markup.inline_keyboard, "the chat flow keeps its inline buttons");
+  assert.deepEqual(plain[1].payload.reply_markup.keyboard, [[{ text: "🆘 Мені зараз погано" }]]);
   assert.match(lastText(chatOnly.say("/app")), /не налаштований/);
 });
 
@@ -2103,7 +2544,7 @@ test("runtime: a poll dispatches the update, answers it, and advances the offset
   h.client.updates.push([{ update_id: 500, message: { message_id: 1, chat: { id: 8, type: "private" }, text: "/start" } }]);
   assert.equal(await h.runtime.pollOnce(), 1);
   assert.equal(h.store.offset, 501);
-  assert.deepEqual(h.client.calls.map((call) => call.method), ["sendMessage"]);
+  assert.deepEqual(h.client.calls.map((call) => call.method), ["sendMessage", "sendMessage"]);
   assert.equal(h.client.calls[0].payload.chat_id, 8);
 });
 

@@ -15,10 +15,12 @@ export const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Free forever: taking GAD-7 and PHQ-9, the result with its crisis block and
 // the weekly note. Plus /export and /delete, which are access to one's own
-// health data rather than a feature to sell.
-export const FREE_FEATURES = ["screening", "note", "export", "delete"];
+// health data rather than a feature to sell, and every route to help: the
+// self-help practices, "Мені зараз погано", the specialist report and the
+// consultation request.
+export const FREE_FEATURES = ["screening", "note", "export", "delete", "selfhelp", "sos", "report", "booking"];
 // Everything else is the one-time purchase.
-export const PAID_FEATURES = ["scales", "history", "statistics", "reminders", "settings"];
+export const PAID_FEATURES = ["scales", "mood", "history", "statistics", "reminders", "settings"];
 
 export function trialEndsAt(user) {
   return Number.isFinite(user && user.trialEndsAt) ? Number(user.trialEndsAt) : null;
