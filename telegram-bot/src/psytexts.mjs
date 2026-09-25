@@ -7,7 +7,7 @@
 // consent, so any change of substance here must bump that version.
 
 import { escapeHtml } from "./telegram.mjs";
-import { starWord } from "./texts.mjs";
+import { packMessages, starWord } from "./texts.mjs";
 import { CONSENT_VERSION, INVITE_PREFIX } from "./psy.mjs";
 
 export function psyPriceLine(price) {
@@ -185,16 +185,19 @@ export function psyNeedsAccess() {
   return "Це частина кабінету фахівця. Подробиці і стан кабінету: /psy";
 }
 
-// A message holds at most 4096 characters, so a long list is cut and says so.
+// The list names as many clients as the keyboard has buttons for. A row with
+// every scale runs to about 150 characters, so thirty of them are packed into
+// as many messages as the 4096-character ceiling needs.
 export const MAX_LISTED_CLIENTS = 30;
 
+// Returns the texts of one or more messages.
 export function psyClientsList(rows) {
   if (!rows.length) {
-    return "<b>Мої клієнти</b>\n\nПоки немає клієнтів зі згодою. Надішліть клієнту посилання з /invite.";
+    return ["<b>Мої клієнти</b>\n\nПоки немає клієнтів зі згодою. Надішліть клієнту посилання з /invite."];
   }
   const shown = rows.slice(0, MAX_LISTED_CLIENTS).map(escapeHtml);
-  const more = rows.length > shown.length ? ["", "Ще клієнтів: " + (rows.length - shown.length) + "."] : [];
-  return ["<b>Мої клієнти</b>", ""].concat(shown, more).join("\n");
+  const more = rows.length > shown.length ? ["\nЩе клієнтів: " + (rows.length - shown.length) + "."] : [];
+  return packMessages(["<b>Мої клієнти</b>\n"].concat(shown, more), "\n");
 }
 
 export function psyClientsKeyboard(entries) {

@@ -37,12 +37,13 @@ import {
   parseUtcOffset, resolveSchedule, zoneOffsetMinutes,
 } from "../src/reminders.mjs";
 import { createRouter, parseAnswerCallback, parseCommand } from "../src/router.mjs";
-import { TelegramClient, TelegramError, encodeBody, escapeHtml } from "../src/telegram.mjs";
+import { TelegramClient, TelegramError, clipText, encodeBody, escapeHtml } from "../src/telegram.mjs";
 import { DEFAULT_CRISIS_CONTACT, loadConfig, parseEnvFile } from "../src/config.mjs";
 import { BotRuntime, buildBot } from "../bot.mjs";
 import { MAX_PAYLOAD_BYTES, parseWebAppPayload } from "../src/webapp.mjs";
 import { SHARED, isCurrent, staleCopies } from "../webapp/build.mjs";
-import { historyMessage, lastMessage, weeklyReminder } from "../src/texts.mjs";
+import { MESSAGE_LIMIT, historyMessages, lastMessages, weeklyReminder } from "../src/texts.mjs";
+import { psyClientsList } from "../src/psytexts.mjs";
 
 const filter = process.argv[2] || "";
 const DIR = mkdtempSync(join(tmpdir(), "gad7-phq9-bot-test-"));
@@ -1391,10 +1392,10 @@ test("store: a stored result with derived fields missing still renders", () => {
   store.load();
   assert.deepEqual(store.history(13).map((entry) => entry.instrument), ["gad7"]);
   const schedule = { weekday: MONDAY, hour: 19, minute: 0, offsetMinutes: 180 };
-  const text = historyMessage(store, 13, schedule);
+  const text = historyMessages(store, 13, schedule).join("\n\n");
   assert.match(text, /<b>12<\/b>\/21 помірна тривога/);
   assert.doesNotMatch(text, /undefined/);
-  assert.doesNotMatch(lastMessage(store, 13, schedule), /undefined/);
+  assert.doesNotMatch(lastMessages(store, 13, schedule).join("\n"), /undefined/);
 });
 
 test("store: the update offset only moves forward and forget removes a user", () => {
@@ -2190,7 +2191,10 @@ test("paywall: history, settings and reminders are locked, the tests are not", (
   assert.match(scoreText(finished), /Бали: <b>7<\/b> з 21/);
   assert.equal(h.store.history(777, "gad7").length, 13, "a free result is still stored");
   // And so do the data commands: access to one's own data is not a feature.
-  assert.match(lastText(h.say("/export")), /gad7/);
+  // Thirteen runs outgrow a message, so the export comes whole as a file.
+  const exported = h.say("/export");
+  assert.equal(exported[0].method, "sendDocument");
+  assert.equal(JSON.parse(exported[0].payload.document.content).results.length, 13);
 
   grantAccess(h.store, 777, h.clock.now);
   const full = lastText(h.say("/results"));
@@ -2227,6 +2231,46 @@ test("paywall: /paysupport explains the refund and what stays free", () => {
   assert.match(text, /Повернення можливе протягом 14 днів/);
   assert.match(text, /результати залишаться/);
   assert.match(text, /GAD-7 і PHQ-9/);
+  assert.doesNotMatch(text, /напишіть тут/, "the bot forwards nothing, so a request typed here reaches no one");
+});
+
+test("paywall: /paysupport routes the refund request to the owner with the charge id", () => {
+  const h = harness({ config: { admin: { username: "owner_acc", chatId: null } } });
+  h.say("/start");
+  grantAccess(h.store, 777, h.clock.now);
+  const reply = h.say("/paysupport");
+  const action = reply[reply.length - 1];
+  assert.match(action.payload.text, /напишіть @owner_acc кнопкою нижче/);
+  const url = action.payload.reply_markup.inline_keyboard[0][0].url;
+  assert.ok(url.startsWith("https://t.me/owner_acc?text="));
+  const draft = decodeURIComponent(url.split("?text=")[1]);
+  assert.match(draft, /@test_bot/);
+  assert.match(draft, /Мій id: 777\./);
+  assert.match(draft, /повний доступ ch_test/, "refundStarPayment needs the user id and this charge id");
+
+  const unpaid = harness({ config: { admin: { username: "owner_acc", chatId: null } } });
+  const none = unpaid.say("/paysupport");
+  assert.match(decodeURIComponent(none[0].payload.reply_markup.inline_keyboard[0][0].url), /Платежів поки немає/);
+  assert.equal(harness().say("/paysupport")[0].payload.reply_markup, undefined, "no owner, no dead link");
+});
+
+test("paywall: a second charge that slips past the check keeps the first and asks for a refund", () => {
+  const h = harness();
+  h.say("/start");
+  grantAccess(h.store, 777, h.clock.now);
+  const paid = h.router.handleUpdate({
+    update_id: 23,
+    message: {
+      message_id: 1,
+      chat: h.chat,
+      successful_payment: {
+        currency: "XTR", total_amount: 100, invoice_payload: "pro-v1:777", telegram_payment_charge_id: "ch_second",
+      },
+    },
+  });
+  assert.equal(h.store.user(777).pro.chargeId, "ch_test", "the first purchase stays on record");
+  assert.match(lastText(paid), /цей платіж зайвий/);
+  assert.match(lastText(paid), /<code>ch_second<\/code>/);
 });
 
 test("paywall: the window is told the state, and the bot still refuses a locked result", () => {
@@ -3071,6 +3115,245 @@ test("runtime: results survive a restart through the snapshot file", async () =>
   assert.equal(second.store.offset, 9);
   assert.equal(second.store.lastResult(8, "gad7").score, 21);
   assert.equal(second.store.history(8).length, 1);
+});
+
+// --------------------------------------------------------------- review regressions
+
+test("reminder: the first Monday after the October switch reminds once, at 19:00 local", () => {
+  const defaults = { time: "19:00", weekday: MONDAY, zone: "Europe/Kyiv", offsetMinutes: null };
+  const user = { chatId: 1, remindersEnabled: true, lastRemindedAt: Date.parse("2026-10-19T16:00:00Z") };
+  const sent = [];
+  for (let now = Date.parse("2026-10-26T12:00:00Z"); now < Date.parse("2026-10-26T20:00:00Z"); now += 60000) {
+    const due = dueReminders({ users: [user], nowMs: now, defaults, graceMs: 12 * 60 * 60 * 1000 });
+    if (!due.length) continue;
+    sent.push(now);
+    user.lastRemindedAt = due[0].dueAt;
+  }
+  assert.deepEqual(sent, [Date.parse("2026-10-26T17:00:00Z")], "once, at 19:00 Kyiv, which is 17:00 UTC in winter");
+  // In the hour before the slot the last one is still the previous Monday.
+  const schedule = { weekday: MONDAY, hour: 19, minute: 0, zone: "Europe/Kyiv" };
+  assert.equal(lastDueBefore(Date.parse("2026-10-26T16:30:00Z"), schedule), Date.parse("2026-10-19T16:00:00Z"));
+  assert.equal(nextDueAfter(Date.parse("2026-10-26T16:30:00Z"), schedule), Date.parse("2026-10-26T17:00:00Z"));
+});
+
+test("telegram: a connection dropped mid-body rejects instead of hanging", async () => {
+  const { server, port } = await startServer((request, response) => {
+    response.writeHead(200, { "content-type": "application/json", "content-length": "1000" });
+    response.write('{"ok":true,"result":[');
+    setTimeout(() => response.socket.destroy(), 20);
+  });
+  const client = new TelegramClient({ token: FAKE_TOKEN, apiBase: "http://127.0.0.1:" + port });
+  let timer = null;
+  const outcome = await Promise.race([
+    client.call("getUpdates", {}, { maxAttempts: 1, timeoutMs: 5000 }).then(() => "resolved", (error) => error),
+    new Promise((done) => { timer = setTimeout(() => done("still pending"), 3000); }),
+  ]);
+  clearTimeout(timer);
+  await closeServer(server);
+  assert.ok(outcome instanceof TelegramError, "the call must settle, got " + String(outcome));
+  assert.equal(outcome.fatal, false, "a dropped connection is worth a retry");
+});
+
+test("paywall: an older invoice cannot charge someone who already bought", () => {
+  const h = harness();
+  h.say("/start");
+  grantAccess(h.store, 777, h.clock.now);
+  const answer = h.router.handleUpdate({
+    update_id: 30,
+    pre_checkout_query: { id: "pcq9", from: { id: 777 }, currency: "XTR", total_amount: 100, invoice_payload: "pro-v1:777" },
+  });
+  assert.equal(answer[0].payload.ok, false);
+  assert.match(answer[0].payload.error_message, /уже відкритий/);
+  assert.equal(h.store.user(777).pro.chargeId, "ch_test", "the charge on record stays the first one");
+  assert.equal(checkPreCheckout({ currency: "XTR", invoice_payload: "pro-v1:777" }, 777, h.store.user(777)).ok, false);
+});
+
+test("runtime: a 403 from one chat keeps the actions for every other chat", async () => {
+  const h = runtimeHarness();
+  h.store.updateUser(2, { remindersEnabled: true });
+  const calls = [];
+  h.runtime.client = {
+    redact: (text) => String(text),
+    call: async (method, payload) => {
+      calls.push(payload.chat_id);
+      if (payload.chat_id === 2 || payload.chat_id === 4) throw new TelegramError("blocked", { status: 403, fatal: true });
+      return {};
+    },
+  };
+  await h.runtime.runActions([
+    { method: "sendMessage", payload: { chat_id: 1, text: "result" } },
+    { method: "sendMessage", payload: { chat_id: 2, text: "alert to a specialist who blocked the bot" } },
+    { method: "sendMessage", payload: { chat_id: 2, text: "more for the same blocked chat" } },
+    { method: "sendMessage", payload: { chat_id: 3, text: "alert to another specialist" } },
+    { method: "sendMessage", payload: { chat_id: 4, text: "a chat with no record" } },
+  ]);
+  assert.deepEqual(calls, [1, 2, 3, 4], "only the blocked chat's second message is skipped");
+  assert.equal(h.store.user(2).remindersEnabled, false);
+  assert.equal(h.store.hasUser(4), false, "a 403 never recreates a record");
+});
+
+test("runtime: a pre-checkout query is answered before slow sends earlier in the batch", async () => {
+  const h = runtimeHarness();
+  let release = null;
+  const gate = new Promise((done) => { release = done; });
+  const order = [];
+  h.runtime.client = {
+    redact: (text) => String(text),
+    getUpdates: async () => [
+      { update_id: 700, message: { message_id: 1, chat: { id: 8, type: "private" }, text: "/start" } },
+      { update_id: 701, pre_checkout_query: { id: "pcq_fast", from: { id: 9 }, currency: "XTR", total_amount: 100, invoice_payload: "pro-v1:9" } },
+    ],
+    call: async (method) => {
+      order.push(method);
+      if (method === "sendMessage" && order.length === 2) await gate;
+      return {};
+    },
+  };
+  const polled = h.runtime.pollOnce();
+  await new Promise((done) => setTimeout(done, 20));
+  assert.equal(order[0], "answerPreCheckoutQuery", "the payment is not left waiting on the message sends");
+  release();
+  assert.equal(await polled, 2);
+  assert.equal(order.filter((method) => method === "answerPreCheckoutQuery").length, 1, "answered once");
+  assert.equal(h.store.offset, 702);
+});
+
+test("runtime: a sweep that outlasts the tick does not overlap the next one", async () => {
+  const h = runtimeHarness();
+  [8, 9].forEach((chatId) => {
+    h.store.updateUser(chatId, { remindersEnabled: true });
+    grantAccess(h.store, chatId, JUST_AFTER_SLOT);
+  });
+  let release = null;
+  const gate = new Promise((done) => { release = done; });
+  const sent = [];
+  h.runtime.client = {
+    redact: (text) => String(text),
+    call: async (method, payload) => {
+      sent.push(payload.chat_id);
+      if (sent.length === 1) await gate;
+      return {};
+    },
+  };
+  const first = h.runtime.sweepReminders(JUST_AFTER_SLOT);
+  assert.deepEqual(await h.runtime.sweepReminders(JUST_AFTER_SLOT + 60000), [], "the next tick leaves the sweep in flight alone");
+  release();
+  assert.deepEqual(await first, [8, 9]);
+  assert.deepEqual(sent, [8, 9], "each chat is reminded once");
+  assert.equal(h.runtime.sweeping, false);
+});
+
+test("note: a start button drops the waiting note, so a typed digit answers the new questionnaire", () => {
+  const h = harness();
+  completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
+  assert.equal(h.sessions.pendingNoteCount(), 1);
+  h.tap("s|phq9");
+  assert.equal(h.sessions.pendingNoteCount(), 0);
+  h.say("2");
+  assert.equal(h.store.lastResult(777, "gad7").note, undefined, "the digit is not a note");
+  assert.equal(h.sessions.get(777, h.clock.now).index, 1, "it answered the first PHQ-9 question");
+});
+
+test("psy: an unfinished application neither outlives /cancel nor swallows a questionnaire", () => {
+  const h = harness();
+  h.say("/start");
+  h.tap("py|apply");
+  assert.match(lastText(h.say("/cancel")), /Заявку скасовано/);
+  assert.equal(h.sessions.application(777, h.clock.now), null);
+  h.tap("py|apply");
+  h.say("/gad7");
+  h.say("2");
+  assert.equal(h.sessions.get(777, h.clock.now).index, 1, "the digit answered GAD-7");
+  assert.equal(h.sessions.application(777, h.clock.now), null);
+});
+
+test("booking: a request cut through an emoji still becomes a working link", () => {
+  const h = harness({ config: { contact: { username: "helper_psy", name: "Олексій", role: "психолог" } } });
+  h.say("/start");
+  h.say("/book");
+  h.tap("b|f|online");
+  h.tap("b|t|day");
+  const ready = h.say("а".repeat(299) + "😊 і далі");
+  const url = ready[ready.length - 1].payload.reply_markup.inline_keyboard[0][0].url;
+  assert.ok(decodeURIComponent(url).endsWith("Запит: " + "а".repeat(299)), "the half emoji is dropped, not encoded");
+  assert.equal(clipText("а".repeat(299) + "😊", 300), "а".repeat(299));
+  assert.equal(clipText("😊😊", 3), "😊");
+  assert.equal(clipText("коротко", 300), "коротко");
+});
+
+test("history: a long /results and /last are split into messages Telegram accepts", () => {
+  const h = harness();
+  h.say("/start");
+  grantAccess(h.store, 777, h.clock.now);
+  const note = "Тиждень був непростий: багато роботи, мало сну, але вихідні з друзями допомогли відновитися.";
+  [GAD7, PHQ9, SLEEP, STRESS, PCL5, WELLBEING].forEach((instrument) => {
+    for (let week = 9; week >= 0; week--) {
+      const answers = instrument.items.map(() => 1);
+      const stored = h.store.addResult(777, buildResult(instrument, answers, WED_NOON_UTC - week * WEEK_MS));
+      h.store.annotateResult(777, stored, week === 0 ? "я".repeat(MAX_NOTE_LENGTH) : note);
+    }
+  });
+  ["/results", "/last"].forEach((command) => {
+    const messages = h.say(command);
+    assert.ok(messages.length > 1, command + " would be refused as one message");
+    messages.forEach((action) => assert.ok(action.payload.text.length <= MESSAGE_LIMIT, command));
+    assert.equal(messages.filter((action) => action.payload.reply_markup).length, 1, command + " keyboard");
+    assert.ok(messages[messages.length - 1].payload.reply_markup, command + " keyboard goes last");
+  });
+  const last = textsOf(h.say("/last")).join("\n");
+  assert.equal(last.split("я".repeat(MAX_NOTE_LENGTH)).length - 1, 6, "/last still shows every note in full");
+});
+
+test("psy: thirty clients with every scale still fit in messages Telegram accepts", () => {
+  const row = "⚠️ Олександра Коваленко, з 01.09.2026: GAD-7 12/21 (+3), PHQ-9 15/27 (-2), Сон 14/28 (+1), " +
+    "Стрес 20/32 (+4), PCL-5 40/80 (+10), Самопочуття 8/24 (-1), настрій 5,4";
+  const messages = psyClientsList(Array.from({ length: 35 }, () => row));
+  assert.ok(messages.length > 1);
+  messages.forEach((text) => assert.ok(text.length <= MESSAGE_LIMIT));
+  assert.match(messages[messages.length - 1], /Ще клієнтів: 5\./);
+});
+
+test("webapp: reminder settings from the app are locked after the trial, like /remind", () => {
+  const h = harness({ config: { webappUrl: "https://example.pages.dev/" } });
+  h.say("/start");
+  h.clock.now += 20 * DAY;
+  const actions = h.router.handleUpdate({
+    update_id: 13,
+    message: {
+      message_id: 1,
+      chat: h.chat,
+      web_app_data: { data: JSON.stringify({ v: 1, type: "reminders", time: "08:15", tz: 120 }) },
+    },
+  });
+  assert.match(lastText(actions), /Повний доступ/);
+  assert.equal(h.store.user(777).reminderTime, null);
+  assert.equal(h.store.user(777).tzOffsetMinutes, null);
+});
+
+test("config: an empty REMINDER_WEEKDAY keeps the Monday default", () => {
+  const env = (weekday) => ({ BOT_TOKEN: FAKE_TOKEN, MEMORY_ONLY: "1", REMINDER_WEEKDAY: weekday });
+  assert.equal(loadConfig(env(""), { envFile: false }).reminder.weekday, MONDAY);
+  assert.equal(loadConfig(env("  "), { envFile: false }).reminder.weekday, MONDAY);
+  assert.equal(loadConfig(env("0"), { envFile: false }).reminder.weekday, 0, "Sunday stays reachable");
+});
+
+test("psy: an alert on one of the bot's own scales says it is not a validated tool", () => {
+  const h = linkedHarness();
+  const high = completeViaKeyboard(h, STRESS, [4, 4, 4, 0, 4, 0, 4, 4]);
+  const alert = high.find((action) => action.payload && action.payload.chat_id === PSY);
+  assert.match(alert.payload.text, /Стрес: 32 з 32/);
+  assert.match(alert.payload.text, /власна шкала самоспостереження/);
+});
+
+test("deploy: the off-machine backup reads its key where the sandboxed unit can reach it", () => {
+  const dir = join(dirname(fileURLToPath(import.meta.url)), "..", "deploy");
+  const backup = readFileSync(join(dir, "backup.sh"), "utf8");
+  const unit = readFileSync(join(dir, "gad7-phq9-backup.service"), "utf8");
+  const guide = readFileSync(join(dir, "DEPLOY.md"), "utf8");
+  assert.match(unit, /ProtectHome=yes/, "the unit hides /home, so ~/.ssh is out of reach");
+  assert.match(backup, /SSH_DIR:-\/var\/lib\/gad7-phq9-bot\/\.ssh/);
+  assert.match(backup, /-i "\$SSH_DIR\/id_ed25519"/);
+  assert.match(guide, /\/var\/lib\/gad7-phq9-bot\/\.ssh\/id_ed25519/);
 });
 
 // --------------------------------------------------------------- runner

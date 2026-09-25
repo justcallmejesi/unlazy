@@ -17,10 +17,8 @@ export const DAY_MS = 24 * 60 * 60 * 1000;
 // the weekly note. Plus /export and /delete, which are access to one's own
 // health data rather than a feature to sell, and every route to help: the
 // self-help practices, "Мені зараз погано", the specialist report and the
-// consultation request.
-export const FREE_FEATURES = ["screening", "note", "export", "delete", "selfhelp", "sos", "report", "booking"];
-// Everything else is the one-time purchase.
-export const PAID_FEATURES = ["scales", "mood", "history", "statistics", "reminders", "settings"];
+// consultation request. Everything else is the one-time purchase: the other
+// scales, the mood check-in, history, statistics, the reminder and its settings.
 
 export function trialEndsAt(user) {
   return Number.isFinite(user && user.trialEndsAt) ? Number(user.trialEndsAt) : null;
@@ -62,19 +60,31 @@ export function invoiceFor(chatId, price) {
   };
 }
 
+export const ALREADY_PRO = "already purchased";
+
 // Answered within ten seconds or Telegram cancels the payment, so this stays
-// synchronous and refuses anything it does not recognize.
-export function checkPreCheckout(query, chatId) {
+// synchronous and refuses anything it does not recognize. An older invoice
+// stays payable after the purchase, so a second charge is refused here: it
+// would bill the person twice for a one-time purchase.
+export function checkPreCheckout(query, chatId, user) {
   if (!query || typeof query !== "object") return { ok: false, reason: "empty pre-checkout query" };
   if (query.currency !== "XTR") return { ok: false, reason: "unexpected currency " + String(query.currency) };
   if (query.invoice_payload !== PAYLOAD_PREFIX + ":" + chatId) {
     return { ok: false, reason: "payload does not belong to this chat" };
   }
+  if (isPro(user)) return { ok: false, reason: ALREADY_PRO };
   return { ok: true };
 }
 
 export function applyPayment(store, chatId, payment, nowMs) {
   if (!payment || payment.currency !== "XTR" || !payment.telegram_payment_charge_id) return null;
+  // Two invoices paid before either payment landed both pass the pre-checkout.
+  // The first charge stays on record, since a refund of it would close access;
+  // the second is handed back for its own refund.
+  const existing = store.hasUser(chatId) ? store.user(chatId).pro : null;
+  if (existing && existing.chargeId) {
+    return Object.assign({}, existing, { duplicateChargeId: String(payment.telegram_payment_charge_id) });
+  }
   const record = {
     since: new Date(nowMs).toISOString(),
     stars: Number(payment.total_amount) || 0,

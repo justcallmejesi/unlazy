@@ -98,42 +98,42 @@ export function offsetAt(schedule, timestampMs) {
   return 0;
 }
 
-// Most recent occurrence of `weekday` at `hour:minute` local time, at or before
-// `nowMs`, returned as a UTC timestamp.
-export function lastDueBefore(nowMs, schedule) {
-  const first = lastDueAtOffset(nowMs, schedule, offsetAt(schedule, nowMs));
-  const atDue = offsetAt(schedule, first);
-  if (atDue === offsetAt(schedule, nowMs)) return first;
-  // `now` and the slot sit on opposite sides of a transition, so the slot is
-  // recomputed in the offset that was actually in effect when it came round.
-  const corrected = lastDueAtOffset(nowMs, schedule, atDue);
-  return corrected > nowMs ? corrected - WEEK_MS : corrected;
+// The UTC instant at which the local wall clock reads `localMs`, in the offset
+// in effect at that instant rather than at any other. A wall-clock time that a
+// spring transition skips still resolves to one instant near it.
+function localToUtc(schedule, localMs) {
+  const guess = localMs - offsetAt(schedule, localMs) * 60 * 1000;
+  return localMs - offsetAt(schedule, guess) * 60 * 1000;
 }
 
-function lastDueAtOffset(nowMs, schedule, offsetMinutes) {
+// This week's slot on the local calendar: `weekday` at `hour:minute`, on the
+// local day of `nowMs` or the most recent one before it. Local milliseconds,
+// not yet a UTC instant.
+function slotOfLocalWeek(nowMs, schedule) {
   const { weekday = MONDAY, hour, minute } = schedule;
-  const shift = offsetMinutes * 60 * 1000;
-  const local = nowMs + shift;
-  const localDate = new Date(local);
-  const startOfLocalDay = Date.UTC(localDate.getUTCFullYear(), localDate.getUTCMonth(), localDate.getUTCDate());
-  const dueOnLocalDay = startOfLocalDay + hour * 60 * 60 * 1000 + minute * 60 * 1000;
-  const daysSinceWeekday = (new Date(startOfLocalDay).getUTCDay() - weekday + 7) % 7;
-  let due = dueOnLocalDay - daysSinceWeekday * DAY_MS;
-  if (due > local) due -= WEEK_MS;
-  return due - shift;
+  const local = new Date(nowMs + offsetAt(schedule, nowMs) * 60 * 1000);
+  const startOfLocalDay = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate());
+  const daysSinceWeekday = (local.getUTCDay() - weekday + 7) % 7;
+  return startOfLocalDay - daysSinceWeekday * DAY_MS + (hour * 60 + minute) * 60 * 1000;
 }
 
+// Most recent occurrence of `weekday` at `hour:minute` local time, at or before
+// `nowMs`, returned as a UTC timestamp. Each candidate slot is placed in its own
+// offset, so a slot and a `now` on opposite sides of a transition still agree
+// on the local hour.
+export function lastDueBefore(nowMs, schedule) {
+  const slot = slotOfLocalWeek(nowMs, schedule);
+  const current = localToUtc(schedule, slot);
+  return current <= nowMs ? current : localToUtc(schedule, slot - WEEK_MS);
+}
+
+// The first slot after `nowMs`. Seven days of elapsed time would land on the
+// wrong local hour across a transition, so the week is added on the local
+// calendar and only then resolved to an instant.
 export function nextDueAfter(nowMs, schedule) {
-  const last = lastDueBefore(nowMs, schedule);
-  const naive = last + WEEK_MS;
-  const atLast = offsetAt(schedule, last);
-  const atNaive = offsetAt(schedule, naive);
-  if (atLast === atNaive) return naive;
-  // A transition falls between the two slots. Adding seven days keeps the
-  // elapsed time, not the wall clock, so the instant is shifted back by the
-  // change in offset to land on the same local hour. The reference is the slot
-  // the week was added to, never `now`.
-  return naive - (atNaive - atLast) * 60 * 1000;
+  const slot = slotOfLocalWeek(nowMs, schedule);
+  const current = localToUtc(schedule, slot);
+  return current > nowMs ? current : localToUtc(schedule, slot + WEEK_MS);
 }
 
 export function resolveSchedule(user, defaults) {

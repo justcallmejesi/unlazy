@@ -77,7 +77,9 @@ export function loadConfig(env = process.env, options = {}) {
   const time = String(env.REMINDER_TIME || "19:00").trim();
   if (!parseTimeOfDay(time)) throw new Error("REMINDER_TIME must be HH:MM, for example 19:00");
 
-  const rawWeekday = String(env.REMINDER_WEEKDAY === undefined ? "1" : env.REMINDER_WEEKDAY).trim();
+  // Empty means the default here as for every other key. Number("") is 0,
+  // which would quietly move the slot to Sunday.
+  const rawWeekday = String(env.REMINDER_WEEKDAY === undefined ? "" : env.REMINDER_WEEKDAY).trim() || "1";
   const weekday = Number(rawWeekday);
   if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) {
     throw new Error("REMINDER_WEEKDAY must be 0 for Sunday through 6 for Saturday, default 1 for Monday");

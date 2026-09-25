@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // GAD-7 and PHQ-9 screening bot for Telegram, with in-memory results and a
-// weekly Wednesday reminder. Zero dependencies. Node 16+.
+// weekly reminder, Monday 19:00 Europe/Kyiv by default. Zero dependencies.
+// Node 16+.
 //
 //   node telegram-bot/bot.mjs           long-poll and serve
 //   node telegram-bot/bot.mjs --demo    run a scripted flow locally, no token
@@ -48,31 +49,38 @@ export class BotRuntime {
     this.router = parts.router;
     this.config = parts.config;
     this.running = false;
+    this.sweeping = false;
     this.tickTimer = null;
   }
 
   // An action may carry `then`: a function of the call's result that returns
   // follow-up actions. createInvoiceLink needs it, since the link it returns
   // has to be put into a message; the router itself never waits on I/O.
-  async runActions(actions) {
+  //
+  // One batch can address several chats: a result also alerts the client's
+  // specialists, a deletion tells each of them. A 403 skips the rest of that
+  // one chat's actions and leaves everyone else's alone.
+  async runActions(actions, blocked = new Set()) {
     for (const action of actions) {
+      const chatId = action.payload && action.payload.chat_id;
+      if (chatId !== undefined && blocked.has(String(chatId))) continue;
       try {
         const result = await this.client.call(action.method, action.payload);
         if (typeof action.then === "function") {
           const next = action.then(result);
-          if (Array.isArray(next) && next.length) await this.runActions(next);
+          if (Array.isArray(next) && next.length) await this.runActions(next, blocked);
         }
       } catch (error) {
         const detail = error instanceof TelegramError ? error.message : this.client.redact(String(error && error.message));
         logError("action " + action.method + " failed: " + detail);
-        if (error instanceof TelegramError && error.status === 403) {
-          // The user blocked the bot or deleted the chat. Stop reminding them.
-          const chatId = action.payload && action.payload.chat_id;
-          if (chatId !== undefined) {
+        if (error instanceof TelegramError && error.status === 403 && chatId !== undefined) {
+          // The user blocked the bot or deleted the chat. Stop reminding them,
+          // without recreating a record that /delete has just removed.
+          blocked.add(String(chatId));
+          if (this.store.hasUser(chatId)) {
             this.store.updateUser(chatId, { remindersEnabled: false });
             log("reminders disabled for chat " + chatId + " after 403");
           }
-          break;
         }
       }
     }
@@ -84,22 +92,49 @@ export class BotRuntime {
       timeoutSeconds: this.config.pollTimeoutSeconds,
     });
     if (!Array.isArray(updates)) return 0;
+    // Telegram cancels a payment whose pre-checkout query waits more than ten
+    // seconds, and the sends of a busy batch, retries included, can take longer
+    // than that. So those answers go out first. The offset still advances in
+    // order: a crash in between costs a second answer to one query, never a
+    // lost message.
+    const answered = new Set();
+    for (const update of updates) {
+      if (!update || !update.pre_checkout_query) continue;
+      answered.add(update);
+      await this.processUpdate(update);
+    }
     for (const update of updates) {
       this.store.setOffset(Number(update.update_id) + 1);
-      let actions = [];
-      try {
-        actions = this.router.handleUpdate(update);
-      } catch (error) {
-        logError("router failed on update " + update.update_id + ": " + String(error && error.message));
-        continue;
-      }
-      await this.runActions(actions);
+      if (!answered.has(update)) await this.processUpdate(update);
     }
     return updates.length;
   }
 
-  // One reminder sweep. Returns the chat ids that were reminded.
+  async processUpdate(update) {
+    let actions = [];
+    try {
+      actions = this.router.handleUpdate(update);
+    } catch (error) {
+      logError("router failed on update " + update.update_id + ": " + String(error && error.message));
+      return;
+    }
+    await this.runActions(actions);
+  }
+
+  // One reminder sweep. Returns the chat ids that were reminded. A sweep slower
+  // than the tick (retries, a rate limit) must not overlap the next one: both
+  // would read the same lastRemindedAt and remind the same chats twice.
   async sweepReminders(nowMs = Date.now()) {
+    if (this.sweeping) return [];
+    this.sweeping = true;
+    try {
+      return await this.sweepOnce(nowMs);
+    } finally {
+      this.sweeping = false;
+    }
+  }
+
+  async sweepOnce(nowMs) {
     const due = dueReminders({
       // The weekly reminder is part of the paid access, so a lapsed chat is
       // filtered out before any slot is computed for it.

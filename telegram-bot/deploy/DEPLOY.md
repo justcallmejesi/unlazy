@@ -153,7 +153,15 @@ journalctl -u gad7-phq9-bot -n 20     # чекаємо "Mini App enabled: ..."
 BACKUP_REMOTE=user@host:/backups/gad7-phq9
 ```
 
-Для цього потрібен ключ SSH без пароля у користувача `gad7bot`. Перевірити таймер і зробити копію просто зараз:
+Для цього потрібен ключ SSH без пароля. Домашньої теки в `gad7bot` немає, а сервіс бекапу не бачить `/home` (`ProtectHome=yes`), тому ключ і `known_hosts` лежать у теці стану:
+
+```text
+sudo -u gad7bot mkdir -p -m 700 /var/lib/gad7-phq9-bot/.ssh
+sudo -u gad7bot ssh-keygen -t ed25519 -N "" -f /var/lib/gad7-phq9-bot/.ssh/id_ed25519
+sudo cat /var/lib/gad7-phq9-bot/.ssh/id_ed25519.pub      # додайте в authorized_keys на цільовому хості
+```
+
+Перевірити таймер і зробити копію просто зараз:
 
 ```text
 systemctl list-timers gad7-phq9-backup

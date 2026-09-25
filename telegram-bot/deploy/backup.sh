@@ -40,8 +40,14 @@ done
 
 # Off-machine copy. BACKUP_REMOTE is any scp target, for example
 # BACKUP_REMOTE=user@host:/backups/gad7-phq9
+# gad7bot has no home directory and the unit hides /home anyway
+# (ProtectHome=yes), so ~/.ssh is unreachable: the key and known_hosts live in
+# the state directory instead.
+SSH_DIR="${BACKUP_SSH_DIR:-/var/lib/gad7-phq9-bot/.ssh}"
 if [ -n "${BACKUP_REMOTE:-}" ]; then
-  if scp -q -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$target" "$BACKUP_REMOTE/"; then
+  if scp -q -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+    -o UserKnownHostsFile="$SSH_DIR/known_hosts" -i "$SSH_DIR/id_ed25519" \
+    "$target" "$BACKUP_REMOTE/"; then
     echo "backup: copied to $BACKUP_REMOTE"
   else
     echo "backup: scp to $BACKUP_REMOTE failed" >&2

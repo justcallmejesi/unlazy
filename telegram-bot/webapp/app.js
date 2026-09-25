@@ -1026,11 +1026,27 @@ $("book-send").addEventListener("click", () => {
 $("data-export").addEventListener("click", exportFile);
 $("data-import-go").addEventListener("click", importFromChat);
 
-$("data-delete").addEventListener("click", async () => {
-  const keys = await storageKeys();
-  await storageRemoveAll(keys);
-  state.results = [];
-  submit({ type: "delete" });
+// The bot asks again in the chat before touching its own copy, but the app's
+// copy is wiped here and cannot wait for that answer, since sendData closes the
+// window. So it asks first: one stray tap must not erase the statistics.
+function confirmAction(message, onAnswer) {
+  if (tg && typeof tg.showConfirm === "function") {
+    try {
+      tg.showConfirm(message, (ok) => onAnswer(Boolean(ok)));
+      return;
+    } catch (error) { /* clients before Bot API 6.2 throw here */ }
+  }
+  onAnswer(window.confirm(message));
+}
+
+$("data-delete").addEventListener("click", () => {
+  confirmAction("Видалити всі дані в застосунку? Бот окремо запитає в чаті про свою копію.", async (ok) => {
+    if (!ok) return;
+    const keys = await storageKeys();
+    await storageRemoveAll(keys);
+    state.results = [];
+    submit({ type: "delete" });
+  });
 });
 
 ready();

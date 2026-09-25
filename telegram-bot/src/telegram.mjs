@@ -118,6 +118,20 @@ export class TelegramClient {
           const chunks = [];
           let size = 0;
           let aborted = false;
+          // A connection that drops mid-body ends with neither `end` nor an
+          // error on the request, and Node emits the response's own error
+          // only to a listener. Without these two the call would never
+          // settle and the poll loop would wait on it for good.
+          response.on("error", (error) => {
+            if (aborted) return;
+            aborted = true;
+            reject(new TelegramError(method + " response failed: " + this.redact(error.message)));
+          });
+          response.on("close", () => {
+            if (aborted || response.complete) return;
+            aborted = true;
+            reject(new TelegramError(method + " connection closed before the response was complete"));
+          });
           response.on("data", (chunk) => {
             size += chunk.length;
             if (size > MAX_RESPONSE_BYTES) {
@@ -221,4 +235,15 @@ export class TelegramClient {
 
 export function escapeHtml(value) {
   return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// At most `limit` UTF-16 units, without splitting a surrogate pair. A plain
+// slice can leave half an emoji at the end, which is not valid text and makes
+// encodeURIComponent throw.
+export function clipText(value, limit) {
+  const text = String(value);
+  if (text.length <= limit) return text;
+  const cut = text.slice(0, limit);
+  const last = cut.charCodeAt(cut.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
 }

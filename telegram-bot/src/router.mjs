@@ -4,18 +4,20 @@
 // mutates the in-memory store and returns the Bot API calls to make. That keeps
 // every conversational branch testable without a network or a live bot.
 
-import { escapeHtml } from "./telegram.mjs";
+import { clipText, escapeHtml } from "./telegram.mjs";
 import { INSTRUMENT_LIST, buildResult, getInstrument } from "./instruments.mjs";
-import { applyPayment, checkPreCheckout, ensureTrial, entitlement, invoiceFor } from "./billing.mjs";
+import { ALREADY_PRO, applyPayment, checkPreCheckout, ensureTrial, entitlement, invoiceFor } from "./billing.mjs";
 import {
   DAY_MS, formatLocalDateTime, formatTimeOfDay, localDateKey, nextDueAfter, offsetAt, parseTimeOfDay,
   parseUtcOffset, resolveSchedule,
 } from "./reminders.mjs";
 import {
-  aboutText, answerKeyboard, appIntro, appKeyboard, appRejected, appResultSaved, exportMessage,
-  greeting, helpText, historyMessage, lastMessage, noteKeyboard, noteQuestion, noteSaved,
+  aboutText, answerKeyboard, appIntro, appKeyboard, appRejected, appResultSaved, EXPORT_INLINE_LIMIT,
+  exportCaption, exportJson, exportMessage,
+  greeting, helpText, historyMessages, lastMessages, noteKeyboard, noteQuestion, noteSaved,
   noteSkipped, questionText, reminderStatus, resultMessage, startKeyboard, unknownInput,
-  alreadyPro, buyKeyboard, contactUnavailable, helpKeyboard, helpOffer, helpRequestText, paySupport,
+  alreadyPro, buyKeyboard, contactUnavailable, duplicatePurchase, helpKeyboard, helpOffer, helpRequestText,
+  paySupport, paySupportDraft, paySupportKeyboard,
   paywall, purchaseThanks, trialNotice, weekdayWords,
   bookingDraft, bookingExpired, bookingFormatKeyboard, bookingIntro, bookingReady, bookingRequestKeyboard,
   bookingRequestQuestion, bookingScoresKeyboard, bookingScoresQuestion, bookingTimeKeyboard,
@@ -56,6 +58,25 @@ const PRIVATE_ONLY =
 
 function send(chatId, text, extra = {}) {
   return { method: "sendMessage", payload: Object.assign({ chat_id: chatId, text }, HTML, extra) };
+}
+
+// A text that was packed into several messages. The keyboard, if any, goes
+// under the last one, where the reader ends up.
+function sendAll(chatId, texts, extra = {}) {
+  return texts.map((text, index) => send(chatId, text, index === texts.length - 1 ? extra : {}));
+}
+
+// /delete and the app's delete button both land here: nothing is erased until
+// the person confirms in the chat.
+function deleteQuestion(chatId) {
+  return send(chatId, "Видалити всі збережені результати та налаштування? Дію не можна скасувати.", {
+    reply_markup: {
+      inline_keyboard: [[
+        { text: "Так, видалити", callback_data: "del|yes" },
+        { text: "Скасувати", callback_data: "del|no" },
+      ]],
+    },
+  });
 }
 
 function ack(callbackQueryId, text) {
@@ -197,8 +218,7 @@ export function createRouter(context) {
   function bookingStart(chatId) {
     const contact = config.contact;
     if (!contact || !contact.username) return [send(chatId, contactUnavailable())];
-    sessions.cancel(chatId);
-    sessions.clearNote(chatId);
+    sessions.clearAll(chatId);
     sessions.startBooking(chatId, now());
     return [send(chatId, bookingIntro(), { reply_markup: bookingFormatKeyboard() })];
   }
@@ -371,25 +391,19 @@ export function createRouter(context) {
       Date.parse(entry.completedAt) >= since && (entry.risk || entry.aboveCutoff));
   }
 
-  function moodAverage(clientChatId) {
-    const since = localDateKey(scheduleFor(clientChatId), now() - 6 * DAY_MS);
-    const recent = store.moods(clientChatId).filter((entry) => entry.date >= since);
-    return recent.length ? recent.reduce((sum, entry) => sum + entry.rating, 0) / recent.length : null;
-  }
-
   function clientsActions(chatId) {
     const denied = requireActive(chatId);
     if (denied) return denied;
     const entries = clientsOf(store, chatId);
     const rows = entries.map((entry) => {
       const parts = INSTRUMENT_LIST.map((instrument) => scaleLine(entry.user.chatId, instrument)).filter(Boolean);
-      const mood = moodAverage(entry.user.chatId);
+      const mood = weekAverage(entry.user.chatId);
       if (mood !== null) parts.push("настрій " + mood.toFixed(1).replace(".", ","));
       return (flagged(entry.user.chatId) ? "⚠️ " : "") + (entry.share.clientName || "Клієнт") + ", з " +
         dateFor(chatId, Date.parse(entry.share.grantedAt)) + (parts.length ? ": " + parts.join(", ") : ": ще немає результатів");
     });
     const buttons = entries.map((entry) => ({ chatId: entry.user.chatId, label: entry.share.clientName || "Клієнт" }));
-    return [send(chatId, psyClientsList(rows), entries.length ? { reply_markup: psyClientsKeyboard(buttons) } : {})];
+    return sendAll(chatId, psyClientsList(rows), entries.length ? { reply_markup: psyClientsKeyboard(buttons) } : {});
   }
 
   function clientCard(chatId, clientChatId) {
@@ -413,7 +427,7 @@ export function createRouter(context) {
       lines.push("⚠️ PHQ-9, питання 9 позначено: " +
         risky.slice(0, 3).map((entry) => dateFor(chatId, Date.parse(entry.completedAt))).join(", "));
     }
-    const mood = moodAverage(clientChatId);
+    const mood = weekAverage(clientChatId);
     if (mood !== null) lines.push("Настрій: середнє за 7 днів " + mood.toFixed(1).replace(".", ","));
     if (lines.length === 3) lines.push("Ще немає результатів.");
     if (share.notes) {
@@ -457,6 +471,9 @@ export function createRouter(context) {
     if (!client) return [];
     return client.shares.filter((share) => !share.revokedAt && stateOf(share.psy).active).map((share) => {
       const lines = [instrument.title + ": " + result.score + " з " + instrument.maxScore + ", " + result.severity + "."];
+      // The bot's own scales say what they are not on every result, and a
+      // specialist reading a threshold alert needs that most.
+      if (instrument.caveat) lines.push(instrument.caveat);
       if (result.risk) lines.push("Позначено питання 9 PHQ-9: думки про смерть або про те, щоб завдати собі шкоди.");
       return send(share.psy, psyAlert(share.clientName, lines), {
         reply_markup: { inline_keyboard: [[{ text: "Картка клієнта", callback_data: "cl|" + clientChatId }]] },
@@ -518,14 +535,17 @@ export function createRouter(context) {
     });
   }
 
+  // Starting a questionnaire always replaces whatever was in progress, from a
+  // command and from a start button alike, including a weekly note that would
+  // otherwise take a typed answer as its text.
   function startInstrument(chatId, instrument) {
+    sessions.clearAll(chatId);
     const user = store.user(chatId);
     if (!user.firstSeenAt) store.updateUser(chatId, { firstSeenAt: new Date(now()).toISOString() });
     startTrialFor(chatId);
     const state = access(chatId);
     // The two screening scales are always free; sleep and stress are not.
     if (instrument.paid && !state.active) return locked(chatId, state);
-    sessions.clearBooking(chatId);
     const session = sessions.start(chatId, instrument, now());
     return [
       send(chatId, "<b>" + escapeHtml(instrument.title) + "</b>, " + escapeHtml(instrument.subtitle) +
@@ -634,9 +654,6 @@ export function createRouter(context) {
   function handleCommand(chatId, parsed, message) {
     const { command, args } = parsed;
     if (Object.prototype.hasOwnProperty.call(INSTRUMENT_COMMANDS, command)) {
-      // Starting a questionnaire always replaces whatever was in progress.
-      sessions.cancel(chatId);
-      sessions.clearNote(chatId);
       return startInstrument(chatId, INSTRUMENT_COMMANDS[command]);
     }
     switch (command) {
@@ -678,8 +695,17 @@ export function createRouter(context) {
         if (state.kind === "pro") return [send(chatId, alreadyPro())];
         return locked(chatId, state);
       }
-      case "paysupport":
-        return [send(chatId, paySupport(config.price))];
+      case "paysupport": {
+        const owner = config.admin && config.admin.username ? config.admin.username : null;
+        if (!owner) return [send(chatId, paySupport(config.price, null))];
+        const user = store.hasUser(chatId) ? store.user(chatId) : null;
+        const charges = [];
+        if (user && user.pro) charges.push("повний доступ " + user.pro.chargeId);
+        if (user && user.psy && user.psy.subscription) charges.push("кабінет фахівця " + user.psy.subscription.lastChargeId);
+        return [send(chatId, paySupport(config.price, owner), {
+          reply_markup: paySupportKeyboard(owner, paySupportDraft(config.botUsername, chatId, charges)),
+        })];
+      }
       case "contact": {
         const offer = helpActions(chatId);
         return offer.length ? offer : [send(chatId, contactUnavailable())];
@@ -713,25 +739,24 @@ export function createRouter(context) {
       case "admin":
         return adminList(chatId);
       case "cancel": {
-        const hadSession = sessions.cancel(chatId);
-        const hadNote = sessions.clearNote(chatId);
-        const hadBooking = sessions.clearBooking(chatId);
-        if (hadSession) return [send(chatId, "Опитувальник перервано. Відповіді не збережені.")];
-        if (hadBooking) return [send(chatId, "Запис перервано. Почати знову: /book")];
-        if (hadNote) return [send(chatId, noteSkipped(), { reply_markup: startKeyboard(access(chatId).active) })];
+        const open = sessions.clearAll(chatId);
+        if (open.session) return [send(chatId, "Опитувальник перервано. Відповіді не збережені.")];
+        if (open.booking) return [send(chatId, "Запис перервано. Почати знову: /book")];
+        if (open.application) return [send(chatId, psyAborted())];
+        if (open.note) return [send(chatId, noteSkipped(), { reply_markup: startKeyboard(access(chatId).active) })];
         return [send(chatId, "Немає чого перервати.")];
       }
       case "results": {
         const state = access(chatId);
         if (!state.active) return locked(chatId, state);
-        return [send(chatId, historyMessage(store, chatId, scheduleFor(chatId)),
-          { reply_markup: startKeyboard(true) })];
+        return sendAll(chatId, historyMessages(store, chatId, scheduleFor(chatId)),
+          { reply_markup: startKeyboard(true) });
       }
       case "last": {
         const state = access(chatId);
         if (!state.active) return locked(chatId, state);
-        return [send(chatId, lastMessage(store, chatId, scheduleFor(chatId)),
-          { reply_markup: startKeyboard(true) })];
+        return sendAll(chatId, lastMessages(store, chatId, scheduleFor(chatId)),
+          { reply_markup: startKeyboard(true) });
       }
       case "remind": {
         const state = access(chatId);
@@ -747,7 +772,7 @@ export function createRouter(context) {
       }
       case "export": {
         const user = store.user(chatId);
-        return [send(chatId, exportMessage({
+        const body = exportJson({
           chatId: user.chatId,
           remindersEnabled: user.remindersEnabled,
           reminderTime: user.reminderTime,
@@ -756,17 +781,23 @@ export function createRouter(context) {
           moods: user.moods,
           shares: user.shares,
           psy: user.psy,
-        }))];
+        });
+        if (body.length <= EXPORT_INLINE_LIMIT) return [send(chatId, exportMessage(body))];
+        return [{
+          method: "sendDocument",
+          payload: {
+            chat_id: chatId,
+            caption: exportCaption(),
+            document: {
+              filename: "export-" + localDateKey(scheduleFor(chatId), now()) + ".json",
+              contentType: "application/json; charset=utf-8",
+              content: body,
+            },
+          },
+        }];
       }
       case "delete":
-        return [send(chatId, "Видалити всі збережені результати та налаштування? Дію не можна скасувати.", {
-          reply_markup: {
-            inline_keyboard: [[
-              { text: "Так, видалити", callback_data: "del|yes" },
-              { text: "Скасувати", callback_data: "del|no" },
-            ]],
-          },
-        })];
+        return [deleteQuestion(chatId)];
       default:
         return [send(chatId, unknownInput())];
     }
@@ -832,6 +863,11 @@ export function createRouter(context) {
     }
 
     if (payload.type === "reminders") {
+      // The same gate as /remind and /tz: the reminder and its settings are
+      // part of the full access, whichever screen they come from.
+      startTrialFor(chatId);
+      const state = access(chatId);
+      if (!state.active) return { actions: locked(chatId, state), payload, rejected: "locked" };
       store.updateUser(chatId, payload.settings);
       return { actions: [send(chatId, reminderLine(chatId))], payload };
     }
@@ -839,14 +875,7 @@ export function createRouter(context) {
     // Deletion is confirmed in the chat rather than performed on a tap inside
     // the app, so an accidental press cannot wipe the history.
     return {
-      actions: [send(chatId, "Видалити всі збережені результати та налаштування? Дію не можна скасувати.", {
-        reply_markup: {
-          inline_keyboard: [[
-            { text: "Так, видалити", callback_data: "del|yes" },
-            { text: "Скасувати", callback_data: "del|no" },
-          ]],
-        },
-      })],
+      actions: [deleteQuestion(chatId)],
       payload,
     };
   }
@@ -861,18 +890,22 @@ export function createRouter(context) {
   // so it does no work beyond checking that the invoice is ours.
   function handlePreCheckout(query) {
     const chatId = query && query.from ? query.from.id : null;
-    const verdict = query && isSubscriptionPayload(query.invoice_payload)
-      ? checkSubscriptionPreCheckout(query, chatId, store.hasUser(chatId) ? store.user(chatId) : null)
-      : checkPreCheckout(query, chatId);
+    const user = store.hasUser(chatId) ? store.user(chatId) : null;
+    const subscription = Boolean(query && isSubscriptionPayload(query.invoice_payload));
+    const verdict = subscription
+      ? checkSubscriptionPreCheckout(query, chatId, user)
+      : checkPreCheckout(query, chatId, user);
     if (verdict.ok) {
       return [{ method: "answerPreCheckoutQuery", payload: { pre_checkout_query_id: query.id, ok: true } }];
     }
+    let errorMessage = "Не вдалося підтвердити платіж. Спробуйте ще раз через " + (subscription ? "/psy." : "/buy.");
+    if (verdict.reason === ALREADY_PRO) errorMessage = alreadyPro();
     return [{
       method: "answerPreCheckoutQuery",
       payload: {
         pre_checkout_query_id: query && query.id,
         ok: false,
-        error_message: "Не вдалося підтвердити платіж. Спробуйте ще раз через /buy.",
+        error_message: errorMessage,
       },
     }];
   }
@@ -888,6 +921,7 @@ export function createRouter(context) {
     }
     const record = applyPayment(store, chatId, payment, now());
     if (!record) return [send(chatId, "Платіж отримано, але я не зміг його прочитати. Напишіть у /paysupport.")];
+    if (record.duplicateChargeId) return [send(chatId, duplicatePurchase(record.duplicateChargeId))];
     const state = access(chatId);
     return [send(chatId, purchaseThanks(config.price), {
       reply_markup: config.webappUrl ? appKeyboard(appUrl(state)) : startKeyboard(true),
@@ -912,7 +946,7 @@ export function createRouter(context) {
     if (application) return applicationText(chatId, application, text);
     const booking = sessions.booking(chatId, now());
     if (booking && booking.step === "request") {
-      const request = text.trim().replace(/\s+/g, " ").slice(0, MAX_BOOKING_REQUEST);
+      const request = clipText(text.trim().replace(/\s+/g, " "), MAX_BOOKING_REQUEST);
       if (!request) return [];
       const updated = sessions.updateBooking(chatId, { request }, now());
       return bookingAfterRequest(chatId, updated);
@@ -964,13 +998,12 @@ export function createRouter(context) {
     if (parts[0] === "s") {
       const instrument = getInstrument(parts[1]);
       if (!instrument) return [ack(query.id, "Невідомий опитувальник")];
-      if (sessions.get(chatId, now())) sessions.cancel(chatId);
       return [ack(query.id)].concat(startInstrument(chatId, instrument));
     }
     if (parts[0] === "h") {
       const state = access(chatId);
       if (!state.active) return [ack(query.id)].concat(locked(chatId, state));
-      return [ack(query.id), send(chatId, historyMessage(store, chatId, scheduleFor(chatId)))];
+      return [ack(query.id)].concat(sendAll(chatId, historyMessages(store, chatId, scheduleFor(chatId))));
     }
     if (parts[0] === "r") {
       const state = access(chatId);
@@ -1022,6 +1055,7 @@ export function createRouter(context) {
     }
     if (parts[0] === "py") {
       if (parts[1] === "apply") {
+        sessions.clearAll(chatId);
         sessions.startApplication(chatId, now());
         return [ack(query.id), send(chatId, psyAskName())];
       }
@@ -1137,10 +1171,7 @@ export function createRouter(context) {
     }
     if (parts[0] === "del") {
       if (parts[1] === "yes") {
-        sessions.cancel(chatId);
-        sessions.clearNote(chatId);
-        sessions.clearBooking(chatId);
-        sessions.clearApplication(chatId);
+        sessions.clearAll(chatId);
         const notices = forgetActions(chatId);
         store.forget(chatId);
         return [ack(query.id, "Видалено"), send(chatId, "Усі дані видалено. /start починає заново.")].concat(notices);

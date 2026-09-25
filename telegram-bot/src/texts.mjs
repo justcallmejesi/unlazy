@@ -3,9 +3,9 @@
 // Every dynamic value is escaped before it enters an HTML-parsed message, so a
 // display name or a stored answer can never inject markup.
 
-import { escapeHtml } from "./telegram.mjs";
+import { clipText, escapeHtml } from "./telegram.mjs";
 import {
-  FREE_INSTRUMENT_LIST, INSTRUMENT_LIST, PAID_INSTRUMENT_LIST, getInstrument, interpretResult, severityOf,
+  FREE_INSTRUMENT_LIST, INSTRUMENT_LIST, PAID_INSTRUMENT_LIST, interpretResult, severityOf,
 } from "./instruments.mjs";
 import { formatLocalDateTime, formatTimeOfDay, formatUtcOffset, offsetAt } from "./reminders.mjs";
 import { MAX_NOTE_LENGTH } from "./store.mjs";
@@ -240,6 +240,32 @@ export function alreadyPro() {
   return "Повний доступ уже відкритий. Дякую, що підтримали бота.";
 }
 
+// Everything a refund needs: refundStarPayment takes the user id and the
+// charge id. `charges` are labelled lines, empty when nothing was paid.
+export function paySupportDraft(botUsername, chatId, charges) {
+  return [
+    "Вітаю! Питання щодо оплати в боті" + (botUsername ? " @" + botUsername : "") + ".",
+    "Мій id: " + chatId + ".",
+    charges.length ? "Платежі: " + charges.join("; ") + "." : "Платежів поки немає.",
+  ].join("\n");
+}
+
+export function paySupportKeyboard(owner, draft) {
+  return {
+    inline_keyboard: [[{
+      text: "Написати про оплату",
+      url: "https://t.me/" + owner + "?text=" + encodeURIComponent(clipText(draft, 600)),
+    }]],
+  };
+}
+
+// Two invoices can both pass the pre-checkout before either payment lands.
+// The first purchase stays on record; this one is to be refunded.
+export function duplicatePurchase(chargeId) {
+  return "Повний доступ уже був відкритий, тому цей платіж зайвий. Зірки повернуться: напишіть через " +
+    "/paysupport і додайте номер платежу: <code>" + escapeHtml(chargeId) + "</code>";
+}
+
 // A message the person can read, edit and send themselves. Telegram never
 // sends it automatically, which is exactly right for health data: the prefill
 // is a draft, the send is their decision.
@@ -282,7 +308,7 @@ export function helpOffer(contact, requestText) {
 // Telegram fills the message box from ?text= and leaves the sending to the
 // person. The draft is capped so no client truncates the link.
 export function helpKeyboard(contact, requestText, options = {}) {
-  const draft = requestText.length > 600 ? requestText.slice(0, 600) : requestText;
+  const draft = clipText(requestText, 600);
   const verb = options.verb || "Написати";
   const rows = [[{
     text: contact.name ? verb + ": " + contact.name : verb + " @" + contact.username,
@@ -296,15 +322,21 @@ export function contactUnavailable() {
   return "Контакт для звернення не налаштований у цьому боті.";
 }
 
-export function paySupport(price) {
+// The bot forwards nothing, so a refund request typed into this chat would
+// reach no one. It goes to the owner's account instead, as a draft the person
+// sends themselves. `owner` is a username or null.
+export function paySupport(price, owner) {
+  const refund = owner
+    ? "Повернення можливе протягом 14 днів: напишіть @" + escapeHtml(owner) + " кнопкою нижче. Чернетка вже містить " +
+      "усе, що потрібно для повернення, зірки повертаються через Telegram. "
+    : "Повернення можливе протягом 14 днів через власника бота, зірки повертаються через Telegram. ";
   return [
     "<b>Оплата і повернення</b>",
     "",
     "Повний доступ це одноразова покупка за " + escapeHtml(priceLine(price)) + ". Підписки немає, " +
       "нічого не списується повторно.",
     "",
-    "Повернення можливе протягом 14 днів: напишіть тут, і я поверну зірки через Telegram. " +
-      "Після повернення платні шкали закриються, а Ваші результати залишаться.",
+    refund + "Після повернення платні шкали закриються, а Ваші результати залишаться.",
     "",
     "Опитувальники GAD-7 і PHQ-9, блок підтримки, техніки самодопомоги, звіт для фахівця, вивантаження " +
       "і видалення даних працюють безкоштовно і після повернення.",
@@ -677,13 +709,34 @@ export function noteSkipped() {
   return "Гаразд, без опису. Результат уже збережено.";
 }
 
+// Telegram refuses a message over 4096 characters, so a list that can grow is
+// packed into as few messages as fit. A block is never split, which keeps its
+// markup whole; the ceiling leaves a margin, since tags and entities count
+// here and not in Telegram's own measure.
+export const MESSAGE_LIMIT = 4000;
+
+export function packMessages(blocks, separator, limit = MESSAGE_LIMIT) {
+  const messages = [];
+  let current = null;
+  blocks.forEach((block) => {
+    if (current !== null && current.length + separator.length + block.length > limit) {
+      messages.push(current);
+      current = null;
+    }
+    current = current === null ? block : current + separator + block;
+  });
+  if (current !== null) messages.push(current);
+  return messages;
+}
+
 // One line for a list, never the whole note.
 function noteSnippet(note, limit = 90) {
   const flat = note.replace(/\s+/g, " ").trim();
   return escapeHtml(flat.length > limit ? flat.slice(0, limit) + "..." : flat);
 }
 
-export function historyMessage(store, chatId, schedule, limit = 10) {
+// Returns the texts of one or more messages.
+export function historyMessages(store, chatId, schedule, limit = 10) {
   const sections = INSTRUMENT_LIST.map((instrument) => {
     const entries = store.history(chatId, instrument.id, limit);
     if (!entries.length) {
@@ -700,10 +753,12 @@ export function historyMessage(store, chatId, schedule, limit = 10) {
     const shown = total > entries.length ? "\nпоказані останні " + entries.length + " з " + total : "";
     return "<b>" + escapeHtml(instrument.title) + "</b>\n" + rows.join("\n") + shown;
   });
-  return ["<b>Історія результатів</b>", ""].concat(sections.join("\n\n")).join("\n");
+  return packMessages(["<b>Історія результатів</b>"].concat(sections), "\n\n");
 }
 
-export function lastMessage(store, chatId, schedule) {
+// Returns the texts of one or more messages: every note is shown in full, and
+// six of them can outgrow a single message.
+export function lastMessages(store, chatId, schedule) {
   const rows = INSTRUMENT_LIST.map((instrument) => {
     const entry = store.lastResult(chatId, instrument.id);
     if (!entry) return "<b>" + escapeHtml(instrument.title) + "</b>: немає даних";
@@ -712,7 +767,7 @@ export function lastMessage(store, chatId, schedule) {
       " " + escapeHtml(shape.severity) + ", " + stampIn(schedule, Date.parse(entry.completedAt));
     return entry.note ? head + "\n<i>" + escapeHtml(entry.note) + "</i>" : head;
   });
-  return ["<b>Останні результати</b>", ""].concat(rows).join("\n");
+  return packMessages(["<b>Останні результати</b>\n"].concat(rows), "\n");
 }
 
 export function reminderStatus(user, schedule, nextDueMs) {
@@ -749,20 +804,24 @@ export function weeklyReminder(store, chatId, schedule) {
     .join("\n");
 }
 
-export function exportMessage(payload) {
-  const body = JSON.stringify(payload, null, 2);
-  const limit = 3500;
-  const clipped = body.length > limit
-    ? body.slice(0, limit) + "\n... вивантаження скорочено, повні дані у знімку на сервері"
-    : body;
-  return "<b>Ваші дані</b>\n<pre>" + escapeHtml(clipped) + "</pre>";
+// Up to this size the export is a message, easy to read and to copy into the
+// app's import. Past it the export is a file: a clipped JSON is neither the
+// person's full data nor parseable by that import.
+export const EXPORT_INLINE_LIMIT = 3500;
+
+export function exportJson(payload) {
+  return JSON.stringify(payload, null, 2);
+}
+
+export function exportMessage(body) {
+  return "<b>Ваші дані</b>\n<pre>" + escapeHtml(body) + "</pre>";
+}
+
+export function exportCaption() {
+  return "Ваші дані повністю, файлом JSON. Його відкриває будь-який текстовий редактор, а вміст можна " +
+    "вставити в застосунок: «Мої дані», «Імпорт із чату».";
 }
 
 export function unknownInput() {
   return "Не зрозумів команду. /help показує список, /gad7 і /phq9 запускають опитувальники.";
-}
-
-export function instrumentTitle(instrumentId) {
-  const instrument = getInstrument(instrumentId);
-  return instrument ? instrument.title : instrumentId;
 }

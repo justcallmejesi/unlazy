@@ -9,6 +9,7 @@
 import { getInstrument } from "./instruments.mjs";
 import { parseTimeOfDay } from "./reminders.mjs";
 import { MAX_NOTE_LENGTH } from "./store.mjs";
+import { clipText } from "./telegram.mjs";
 import {
   BOOKING_FORMATS, BOOKING_TIMES, MAX_BOOKING_REQUEST, MOOD_MAX, MOOD_MIN, bookingOption, moodTag,
 } from "./selfhelp.mjs";
@@ -115,7 +116,7 @@ function parseBooking(parsed) {
   if (parsed.request !== undefined && parsed.request !== null) {
     if (typeof parsed.request !== "string") return fail("request must be a string");
     const flat = parsed.request.trim().replace(/\s+/g, " ");
-    if (flat) request = flat.slice(0, MAX_BOOKING_REQUEST);
+    if (flat) request = clipText(flat, MAX_BOOKING_REQUEST);
   }
   return {
     ok: true,

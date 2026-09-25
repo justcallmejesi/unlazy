@@ -56,12 +56,6 @@ export class SessionManager {
     return this.byChat.delete(Number(chatId));
   }
 
-  bindMessage(chatId, messageId) {
-    const session = this.byChat.get(Number(chatId));
-    if (session) session.messageId = messageId;
-    return session;
-  }
-
   // `expect` is optional; when present it must match the live session and its
   // current item, which is how repeated taps on an older question are ignored.
   answer(chatId, value, expect, nowMs) {
@@ -186,5 +180,18 @@ export class SessionManager {
 
   clearApplication(chatId) {
     return this.applicationsByChat.delete(Number(chatId));
+  }
+
+  // One conversation per chat. Each of the four states above claims the chat's
+  // next plain message, so starting any of them ends the others: otherwise a
+  // forgotten application or weekly note would swallow a typed answer.
+  // Returns what was open, so /cancel can say what it interrupted.
+  clearAll(chatId) {
+    return {
+      session: this.cancel(chatId),
+      note: this.clearNote(chatId),
+      booking: this.clearBooking(chatId),
+      application: this.clearApplication(chatId),
+    };
   }
 }
