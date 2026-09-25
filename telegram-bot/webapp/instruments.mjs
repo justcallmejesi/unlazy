@@ -5,14 +5,16 @@
 // both instruments. Item 10 of the PHQ-9 (functional impairment) is asked but
 // never added to the total, which is how the instrument defines it.
 //
-// Every band carries a short description of what that level usually means, and
-// every instrument carries a validation note shown with each result. The GAD-7
-// and PHQ-9 figures come from the original validation studies and describe the
-// English originals, which the note says, because a translation can shift them:
 //   Spitzer RL, Kroenke K, Williams JBW, Lowe B. A brief measure for assessing
 //   generalized anxiety disorder: the GAD-7. Arch Intern Med 2006;166:1092-7.
 //   Kroenke K, Spitzer RL, Williams JBW. The PHQ-9: validity of a brief
 //   depression severity measure. J Gen Intern Med 2001;16:606-13.
+//
+// Every band carries a short description of what that level usually means, and
+// every result gets a line of support: validation in the therapeutic sense, the
+// owner's word for it, telling the person the score is understandable and what
+// the scales are for. It is not psychometric validation, which the bot's own
+// scales never had and say so in their caveat.
 
 const FREQUENCY_OPTIONS = [
   { value: 0, label: "Зовсім не турбували" },
@@ -58,9 +60,6 @@ export const GAD7 = {
     scored("Дратівливість або спалахи гніву"),
     scored("Страх, що станеться щось жахливе"),
   ],
-  validation: "Spitzer та співавт., 2006: 2740 пацієнтів первинної медичної допомоги. " +
-    "Внутрішня узгодженість α = 0,92. Для порогу 10: чутливість 89% і специфічність 82% " +
-    "щодо генералізованого тривожного розладу. Показники отримано для англомовного оригіналу.",
   bands: [
     {
       max: 4,
@@ -115,10 +114,6 @@ export const PHQ9 = {
       scored: false,
     },
   ],
-  validation: "Kroenke та співавт., 2001: 6000 пацієнтів первинної медичної допомоги та " +
-    "акушерсько-гінекологічних клінік. Внутрішня узгодженість α від 0,86 до 0,89. Для порогу 10: " +
-    "чутливість 88% і специфічність 88% щодо великого депресивного розладу. " +
-    "Показники отримано для англомовного оригіналу.",
   bands: [
     {
       max: 4,
@@ -157,8 +152,7 @@ export const PHQ9 = {
 // licence, and say plainly in every result that they are self-observation
 // scales and not validated screening tools.
 
-const OWN_SCALE_VALIDATION = "Не проводилась. Це власна шкала самоспостереження цього бота, " +
-  "а не валідований опитувальник: вона показує динаміку, але не є скринінгом.";
+const OWN_SCALE_CAVEAT = "Це власна шкала самоспостереження цього бота, а не валідований опитувальник.";
 
 const SLEEP_OPTIONS = [
   { value: 0, label: "Ніколи" },
@@ -179,7 +173,7 @@ export const SLEEP = {
   maxScore: 28,
   cutoff: 14,
   paid: true,
-  validation: OWN_SCALE_VALIDATION,
+  caveat: OWN_SCALE_CAVEAT,
   items: [
     sleepItem("Довго не могли заснути"),
     sleepItem("Прокидалися вночі і не могли заснути знову"),
@@ -237,7 +231,7 @@ export const STRESS = {
   maxScore: 32,
   cutoff: 20,
   paid: true,
-  validation: OWN_SCALE_VALIDATION,
+  caveat: OWN_SCALE_CAVEAT,
   items: [
     stressItem("Напруження, від якого важко було розслабитися"),
     stressItem("Відчуття, що справ більше, ніж Ви здатні витримати"),
@@ -308,22 +302,42 @@ export function severityOf(instrument, score) {
   return bandOf(instrument, score).label;
 }
 
-// What a result means and what to do next, worded once for the chat and the
-// app. A marked risk item outranks a low total: the reassuring words of the
-// lower bands would contradict the support block shown beside them.
+const SUPPORT_LOW = "Стан змінюється від тижня до тижня, і це нормально. Регулярні проходження " +
+  "допоможуть вчасно помітити, якщо навантаження почне накопичуватися і знадобиться підтримка.";
+
+const SUPPORT_HIGH = "Не лякайтеся цього результату: він не означає, що з Вами щось не так. " +
+  "Найчастіше так проявляються сильний стрес, перевантаження або важкі обставини, і зараз через це " +
+  "проходить багато людей. Ці шкали для того і потрібні: вони допомагають зрозуміти, чи варто " +
+  "звернутися по підтримку, а не ставлять діагноз.";
+
+// Acknowledge the disclosure, keep hope, point towards people. Never frame the
+// thoughts as harmless or as something to wait out.
+const SUPPORT_RISK = "Про думки щодо смерті чи самоушкодження непросто сказати навіть собі, і добре, " +
+  "що Ви відповіли чесно. Такі думки бувають у людей, яким дуже важко, і не роблять Вас слабкими. " +
+  "З цим можна впоратися, і не самотужки.";
+
+// What a result means, a line of support, and what to do next, worded once for
+// the chat and the app. A marked risk item outranks a low total: the
+// reassuring words of the lower bands would contradict the crisis block shown
+// beside them.
 export function interpretResult(instrument, result) {
-  const riskBelowCutoff = Boolean(result.risk) && !result.aboveCutoff;
+  const risk = Boolean(result.risk);
+  const riskBelowCutoff = risk && !result.aboveCutoff;
   let advice = "Бал нижче порогу " + instrument.cutoff + ". Продовжуйте спостерігати за динамікою.";
   if (result.aboveCutoff) {
     advice = "Бал вище порогу " + instrument.cutoff + ". Це підстава обговорити стан із лікарем або психотерапевтом.";
   } else if (riskBelowCutoff) {
-    advice = "Бал нижче порогу " + instrument.cutoff + ", але відповідь про думки щодо смерті чи " +
-      "самоушкодження варто обговорити з фахівцем, не чекаючи наступного тесту.";
+    advice = "Бал нижче порогу " + instrument.cutoff + ", але цю відповідь варто обговорити з фахівцем, " +
+      "не чекаючи наступного тесту.";
   }
+  let support = SUPPORT_LOW;
+  if (risk) support = SUPPORT_RISK;
+  else if (result.aboveCutoff) support = SUPPORT_HIGH;
   return {
     description: riskBelowCutoff
       ? "Сума балів невисока, але одна з відповідей важливіша за суму."
       : bandOf(instrument, result.score).description,
+    support,
     advice,
   };
 }

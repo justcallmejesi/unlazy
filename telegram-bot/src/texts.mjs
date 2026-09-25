@@ -353,25 +353,26 @@ export function resultMessage(instrument, result, previous, schedule, crisisCont
     const option = impairmentItem.options.find((candidate) => candidate.value === result.impairment);
     if (option) lines.push("Вплив на життя: " + escapeHtml(option.label.toLowerCase()));
   }
+  // What the level means, then that it is understandable, then what to do.
   const meaning = interpretResult(instrument, result);
   lines.push("");
   lines.push(escapeHtml(meaning.description));
   lines.push("");
+  lines.push("<i>" + escapeHtml(meaning.support) + "</i>");
+  lines.push("");
   lines.push(escapeHtml(meaning.advice));
-  // The crisis block goes before the reference material, never after it.
+  // The crisis block goes before the fine print, never after it.
   if (result.risk) {
     lines.push("");
     lines.push(crisisBlock(crisisContact));
   }
-  lines.push("");
-  lines.push(validationNote(instrument));
+  if (instrument.caveat) {
+    lines.push("");
+    lines.push("<i>" + escapeHtml(instrument.caveat) + "</i>");
+  }
   lines.push("");
   lines.push(DISCLAIMER);
   return lines.join("\n");
-}
-
-function validationNote(instrument) {
-  return "<i><b>Валідизація.</b> " + escapeHtml(instrument.validation) + "</i>";
 }
 
 // A snapshot edited by hand can omit the derived fields, so both are recomputed

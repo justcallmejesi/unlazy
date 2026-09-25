@@ -163,6 +163,7 @@ label.field { display: block; font-size: 14px; color: var(--ink-2); margin: 12px
 .score { font-size: 42px; font-weight: 650; letter-spacing: -.02em; }
 .score small { font-size: 17px; font-weight: 500; color: var(--ink-3); }
 .band { font-size: 16px; margin-top: 2px; }
+#result-support { font-style: italic; color: var(--ink-2); }
 .callout { border-left: 3px solid var(--accent); padding: 8px 0 8px 12px; margin: 12px 0; font-size: 15px; }
 .callout.warn { border-left-color: var(--danger); }
 .callout a { color: var(--accent); }
@@ -257,9 +258,10 @@ td .note { display: block; color: var(--ink-2); font-size: 13px; margin-top: 3px
     <div class="muted" id="result-delta"></div>
   </div>
   <p id="result-description"></p>
+  <p id="result-support"></p>
   <div class="callout" id="result-cutoff"></div>
   <div class="callout warn" id="result-crisis" hidden></div>
-  <p class="muted" id="result-validation"></p>
+  <p class="muted" id="result-caveat" hidden></p>
   <button class="primary" id="result-send">Зберегти і закрити</button>
   <p class="muted" id="result-send-hint">Бал і опис підуть у чат, вікно закриється.</p>
 </div>

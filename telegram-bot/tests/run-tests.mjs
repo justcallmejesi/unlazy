@@ -181,7 +181,7 @@ test("instruments: the sleep scale runs 0 to 28 and says what it is not", () => 
   assert.equal(SLEEP.cutoff, 14);
   assert.equal(SLEEP.paid, true);
   // Written for this bot, so it must never present itself as a screening tool.
-  assert.match(SLEEP.validation, /не валідований опитувальник/);
+  assert.match(SLEEP.caveat, /не валідований опитувальник/);
 });
 
 test("instruments: the stress scale counts its two positive items backwards", () => {
@@ -201,7 +201,7 @@ test("instruments: the stress scale counts its two positive items backwards", ()
   const bands = [[0, "низький"], [9, "низький"], [10, "помірний"], [19, "помірний"], [20, "високий"], [32, "високий"]];
   bands.forEach(([score, expected]) => assert.match(severityOf(STRESS, score), new RegExp(expected)));
   assert.match(STRESS.prompt, /останнього місяця/, "this scale asks about a month, not two weeks");
-  assert.match(STRESS.validation, /не валідований опитувальник/);
+  assert.match(STRESS.caveat, /не валідований опитувальник/);
 });
 
 test("instruments: only the sleep and stress scales are paid", () => {
@@ -211,22 +211,12 @@ test("instruments: only the sleep and stress scales are paid", () => {
   assert.equal(STRESS.paid, true);
 });
 
-test("instruments: every scale states its validation, and the bot's own scales say there was none", () => {
-  // The published figures, with the study they come from and the language they
-  // were measured in: a translation can shift them.
-  assert.match(GAD7.validation, /Spitzer та співавт\., 2006/);
-  assert.match(GAD7.validation, /α = 0,92/);
-  assert.match(GAD7.validation, /чутливість 89% і специфічність 82%/);
-  assert.match(PHQ9.validation, /Kroenke та співавт\., 2001/);
-  assert.match(PHQ9.validation, /чутливість 88% і специфічність 88%/);
-  [GAD7, PHQ9].forEach((instrument) => {
-    assert.match(instrument.validation, /англомовного оригіналу/, instrument.id);
-    assert.doesNotMatch(instrument.validation, /Не проводилась/, instrument.id);
-  });
+test("instruments: only the bot's own scales carry a caveat", () => {
+  // The published instruments need no disclaimer, the bot's own ones do.
+  assert.equal(GAD7.caveat, undefined);
+  assert.equal(PHQ9.caveat, undefined);
   [SLEEP, STRESS].forEach((instrument) => {
-    assert.match(instrument.validation, /^Не проводилась\./, instrument.id);
-    assert.match(instrument.validation, /не валідований опитувальник/, instrument.id);
-    assert.doesNotMatch(instrument.validation, /чутливість|специфічність|α =/, instrument.id + " claims no figures");
+    assert.match(instrument.caveat, /не валідований опитувальник/, instrument.id);
   });
 });
 
@@ -246,23 +236,33 @@ test("instruments: every band describes its state, and bandOf agrees with severi
     // A hand-edited score above the scale still lands in the top band.
     assert.equal(bandOf(instrument, instrument.maxScore + 5), instrument.bands[instrument.bands.length - 1]);
   });
-  assert.doesNotMatch(GAD7.validation + PHQ9.validation + SLEEP.validation, /[\u2013\u2014]/);
 });
 
-test("results: the chat result describes the state and carries the validation note", () => {
+test("results: the chat result describes the state, supports, then advises", () => {
   const h = harness();
   h.say("/start");
   const text = scoreText(completeViaKeyboard(h, GAD7, [2, 2, 2, 2, 2, 2, 2]));
   const description = escapeHtml(bandOf(GAD7, 14).description);
   assert.match(text, /Оцінка: помірна тривога/);
   assert.ok(text.indexOf(description) !== -1, "the band description is in the result");
-  assert.match(text, /<i><b>Валідизація\.<\/b> Spitzer та співавт\., 2006/);
-  // Numbers, then what they mean, then what to do, then the reference material.
+  assert.match(text, /<i>Не лякайтеся цього результату: він не означає, що з Вами щось не так\./);
+  assert.match(text, /допомагають зрозуміти, чи варто звернутися по підтримку/);
+  // Numbers, then what they mean, then that it is understandable, then what to do.
   const at = (needle) => text.indexOf(needle);
   assert.ok(at("Оцінка:") < at(description));
-  assert.ok(at(description) < at("Бал вище порогу 10"));
-  assert.ok(at("Бал вище порогу 10") < at("Валідизація."));
-  assert.ok(at("Валідизація.") < at("не замінює консультацію"));
+  assert.ok(at(description) < at("Не лякайтеся"));
+  assert.ok(at("Не лякайтеся") < at("Бал вище порогу 10"));
+  assert.ok(at("Бал вище порогу 10") < at("не замінює консультацію"));
+  assert.doesNotMatch(text, /Валідизація|Spitzer|не валідований/, "a published scale has no caveat");
+});
+
+test("results: a score below the cutoff gets the calm support line", () => {
+  const h = harness();
+  h.say("/start");
+  const text = scoreText(completeViaKeyboard(h, GAD7, [0, 1, 0, 1, 0, 0, 1]));
+  assert.match(text, /Стан змінюється від тижня до тижня, і це нормально/);
+  assert.doesNotMatch(text, /Не лякайтеся/);
+  assert.match(text, /Бал нижче порогу 10\. Продовжуйте спостерігати/);
 });
 
 test("results: a marked risk item is never answered with reassurance", () => {
@@ -274,26 +274,39 @@ test("results: a marked risk item is never answered with reassurance", () => {
   assert.ok(text.indexOf(escapeHtml(bandOf(PHQ9, 1).description)) === -1, "no reassuring band text");
   assert.doesNotMatch(text, /Продовжуйте спостерігати/);
   assert.match(text, /одна з відповідей важливіша за суму/);
-  assert.match(text, /варто обговорити з фахівцем, не чекаючи наступного тесту/);
-  // The support block leads, ahead of any reference text.
+  assert.match(text, /цю відповідь варто обговорити з фахівцем, не чекаючи наступного тесту/);
+  // The support line acknowledges the disclosure instead of calming it down.
+  assert.match(text, /добре, що Ви відповіли чесно/);
+  assert.doesNotMatch(text, /це нормально|Не лякайтеся/);
   assert.ok(text.indexOf("Важливо") !== -1, "the crisis block is present");
-  assert.ok(text.indexOf("Важливо") < text.indexOf("Валідизація."));
-  assert.match(text, /Kroenke та співавт\., 2001/);
+  assert.ok(text.indexOf("добре, що Ви відповіли чесно") < text.indexOf("Важливо"));
+  assert.ok(text.indexOf("Важливо") < text.indexOf("не замінює консультацію"));
 });
 
 test("instruments: interpretResult keeps band wording unless risk outranks a low total", () => {
   const calm = buildResult(PHQ9, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], WED_NOON_UTC);
   assert.equal(interpretResult(PHQ9, calm).description, bandOf(PHQ9, 0).description);
   assert.match(interpretResult(PHQ9, calm).advice, /нижче порогу 10\. Продовжуйте спостерігати/);
+  assert.match(interpretResult(PHQ9, calm).support, /це нормально/);
+  const loaded = buildResult(GAD7, [2, 2, 2, 2, 2, 2, 2], WED_NOON_UTC);
+  assert.match(interpretResult(GAD7, loaded).support, /^Не лякайтеся цього результату/);
   // Above the cutoff the band text stays, risk or not: it already names the weight.
   const heavy = buildResult(PHQ9, [3, 3, 3, 3, 3, 3, 3, 0, 1, 2], WED_NOON_UTC);
   assert.equal(heavy.risk, true);
   assert.equal(interpretResult(PHQ9, heavy).description, bandOf(PHQ9, heavy.score).description);
   assert.match(interpretResult(PHQ9, heavy).advice, /вище порогу 10/);
+  assert.match(interpretResult(PHQ9, heavy).support, /відповіли чесно/, "risk outranks a high score too");
   const lowRisk = buildResult(PHQ9, [1, 0, 0, 1, 0, 0, 0, 0, 2, 0], WED_NOON_UTC);
   assert.equal(lowRisk.aboveCutoff, false);
   assert.doesNotMatch(interpretResult(PHQ9, lowRisk).description, /майже немає|не заважають/);
   assert.doesNotMatch(interpretResult(PHQ9, lowRisk).advice, /Продовжуйте спостерігати/);
+  const riskSupport = interpretResult(PHQ9, lowRisk).support;
+  assert.match(riskSupport, /не самотужки/, "it points towards people");
+  assert.doesNotMatch(riskSupport, /нормальн|мине само|не лякайтеся/i, "never framed as harmless");
+  [calm, loaded, lowRisk].forEach((result) => {
+    const instrument = result.instrument === "gad7" ? GAD7 : PHQ9;
+    assert.doesNotMatch(interpretResult(instrument, result).support, /[\u2013\u2014]/, "no en or em dash");
+  });
 });
 
 // --------------------------------------------------------------- billing
@@ -1401,7 +1414,7 @@ test("paywall: a full stress run through the keyboard scores the reversed items"
   assert.match(scoreText(finished), /Бали: <b>32<\/b> з 32/);
   assert.match(scoreText(finished), /високий рівень напруження/);
   assert.match(scoreText(finished), /не валідований опитувальник/);
-  assert.match(scoreText(finished), /<b>Валідизація\.<\/b> Не проводилась/);
+  assert.match(scoreText(finished), /Не лякайтеся цього результату/);
   assert.match(scoreText(finished), /Напруження високе і тримається довго/);
   assert.equal(h.store.lastResult(777, "stress").score, 32);
 });
@@ -1572,19 +1585,24 @@ test("webapp: the page and its script exist and reference each other", () => {
   assert.doesNotMatch(app, /помірно тяжкі/, "the script must not restate a band");
 });
 
-test("webapp: the result screen describes the state and shows the validation note after any crisis", () => {
+test("webapp: the result screen describes, supports, and keeps the own-scale caveat after any crisis", () => {
   const here = dirname(fileURLToPath(import.meta.url));
   const html = readFileSync(join(here, "..", "webapp", "index.html"), "utf8");
   const app = readFileSync(join(here, "..", "webapp", "app.js"), "utf8");
-  assert.match(html, /id="result-description"/);
-  assert.match(html, /id="result-validation"/);
-  assert.ok(html.indexOf('id="result-crisis"') < html.indexOf('id="result-validation"'),
-    "the crisis callout comes before the reference text");
+  ["result-description", "result-support", "result-cutoff", "result-crisis", "result-caveat"].forEach((id) => {
+    assert.match(html, new RegExp('id="' + id + '"'), id);
+  });
+  const at = (id) => html.indexOf('id="' + id + '"');
+  assert.ok(at("result-description") < at("result-support"));
+  assert.ok(at("result-support") < at("result-cutoff"));
+  assert.ok(at("result-crisis") < at("result-caveat"), "the crisis callout comes before the fine print");
   assert.match(app, /\$\("result-description"\)\.textContent = meaning\.description/);
+  assert.match(app, /\$\("result-support"\)\.textContent = meaning\.support/);
   assert.match(app, /\$\("result-cutoff"\)\.textContent = meaning\.advice/);
-  assert.match(app, /createTextNode\(instrument\.validation\)/);
+  // Until now the app never showed the own-scale caveat at all.
+  assert.match(app, /caveat\.hidden = !instrument\.caveat/);
   // The texts come from the shared definitions, never restated in the app.
-  assert.doesNotMatch(app, /майже не турбує|Не проводилась|Spitzer|Бал вище порогу/);
+  assert.doesNotMatch(app, /майже не турбує|Не лякайтеся|не валідований|Бал вище порогу/);
 });
 
 test("webapp: a well formed result payload is accepted and normalized", () => {
@@ -1668,7 +1686,7 @@ test("webapp: a result from the app is rescored, stored, and reported in the cha
   assert.match(scoreText(actions), /Бали: <b>14<\/b> з 21/);
   // A result from the app gets the same description and validation note.
   assert.match(scoreText(actions), /Тривога турбує більшу частину часу/);
-  assert.match(scoreText(actions), /Валідизація\./);
+  assert.match(scoreText(actions), /Не лякайтеся цього результату/);
   const stored = h.store.lastResult(777, "gad7");
   assert.equal(stored.score, 14, "the score is computed by the bot, not taken from the payload");
   assert.equal(stored.severity, "помірна тривога");

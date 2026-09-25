@@ -329,6 +329,7 @@ async function finish() {
   $("result-band").textContent = "Оцінка: " + result.severity;
   const meaning = interpretResult(instrument, result);
   $("result-description").textContent = meaning.description;
+  $("result-support").textContent = meaning.support;
   const delta = previous ? result.score - previous.score : null;
   $("result-delta").textContent = previous
     ? "Минулого разу " + previous.score + ", " + (delta === 0 ? "без змін" : (delta > 0 ? "+" : "") + delta)
@@ -353,12 +354,10 @@ async function finish() {
     crisis.appendChild(link);
   }
 
-  const validation = $("result-validation");
-  validation.textContent = "";
-  const label = document.createElement("b");
-  label.textContent = "Валідизація. ";
-  validation.appendChild(label);
-  validation.appendChild(document.createTextNode(instrument.validation));
+  // The bot's own scales say what they are not, on every result.
+  const caveat = $("result-caveat");
+  caveat.hidden = !instrument.caveat;
+  caveat.textContent = instrument.caveat || "";
 
   await saveResultLocally(result);
   state.results = await loadResults();
