@@ -2,9 +2,10 @@
 // Refresh the Mini App's copies of the shared definitions.
 // Zero dependencies. Node 16+.
 //
-// The app must not restate the items, options, bands or practices: a copy that
-// drifts would score the same answers differently, or word the same practice
-// differently, in the window and in the chat. Each copy is byte-identical to
+// The app must not restate the items, options, bands, practices or what the
+// purchase opens: a copy that drifts would score the same answers differently,
+// or word the same practice or promise differently, in the window and in the
+// chat. Each copy is byte-identical to
 // its source in src/ and a test fails when one is stale, so this script is the
 // only way they change.
 //
@@ -16,7 +17,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-export const SHARED = ["instruments.mjs", "selfhelp.mjs"].map((name) => ({
+export const SHARED = ["instruments.mjs", "selfhelp.mjs", "offer.mjs"].map((name) => ({
   name,
   source: join(HERE, "..", "src", name),
   copy: join(HERE, name),

@@ -42,7 +42,10 @@ import { DEFAULT_CRISIS_CONTACT, loadConfig, parseEnvFile } from "../src/config.
 import { BotRuntime, buildBot } from "../bot.mjs";
 import { MAX_PAYLOAD_BYTES, parseWebAppPayload } from "../src/webapp.mjs";
 import { SHARED, isCurrent, staleCopies } from "../webapp/build.mjs";
-import { MESSAGE_LIMIT, historyMessages, lastMessages, weeklyReminder } from "../src/texts.mjs";
+import {
+  ACCESS_BUTTON, MESSAGE_LIMIT, accessOffer, historyMessages, isAccessText, lastMessages, paywall, weeklyReminder,
+} from "../src/texts.mjs";
+import { freeLines, unlockedLines } from "../src/offer.mjs";
 import { psyClientsList } from "../src/psytexts.mjs";
 
 const filter = process.argv[2] || "";
@@ -727,7 +730,7 @@ test("webapp: a mood from the app is stored, a report is sent, a booking becomes
 test("webapp: the launch URL carries the public contact for the SOS screen", () => {
   const h = harness({ config: { webappUrl: "https://example.pages.dev/", contact: BOOKING_CONTACT } });
   const url = h.say("/start")[0].payload.reply_markup.keyboard[0][0].web_app.url;
-  assert.equal(url, "https://example.pages.dev/?pro=1&c=helper_psy&cn=" + encodeURIComponent("Олексій"));
+  assert.equal(url, "https://example.pages.dev/?pro=1&plan=trial&days=14&price=100&c=helper_psy&cn=" + encodeURIComponent("Олексій"));
 });
 
 // --------------------------------------------------------------- specialist mode
@@ -1652,9 +1655,10 @@ test("router: command parsing tolerates a bot mention and arguments", () => {
 test("router: /start greets, registers the user, and offers both instruments", () => {
   const h = harness();
   const actions = h.say("/start");
-  // The greeting, then the reply keyboard that keeps "Мені зараз погано" in reach.
+  // The greeting, then the reply keyboard that keeps "Мені зараз погано" in reach,
+  // with the offer above it for anyone who has not bought.
   assert.deepEqual(methodsOf(actions), ["sendMessage", "sendMessage"]);
-  assert.deepEqual(actions[1].payload.reply_markup.keyboard, [[{ text: "🆘 Мені зараз погано" }]]);
+  assert.deepEqual(actions[1].payload.reply_markup.keyboard, [[{ text: "⭐ Повний доступ" }], [{ text: "🆘 Мені зараз погано" }]]);
   const text = actions[0].payload.text;
   assert.match(text, /Тест/);
   assert.match(text, /GAD-7/);
@@ -2169,7 +2173,9 @@ test("paywall: a successful payment unlocks everything for good", () => {
   assert.match(lastText(h.say("/sleep")), /Довго не могли заснути/);
   h.clock.now += 5 * 365 * DAY;
   assert.equal(h.router.access(777).active, true, "a one-time purchase does not lapse");
-  assert.match(lastText(h.say("/buy")), /уже відкритий/);
+  const bought = h.say("/buy");
+  assert.match(lastText(bought), /Відкрито назавжди/);
+  assert.equal(bought[0].payload.reply_markup, undefined, "no pay button once bought");
 });
 
 test("paywall: history, settings and reminders are locked, the tests are not", () => {
@@ -2277,10 +2283,10 @@ test("paywall: the window is told the state, and the bot still refuses a locked 
   const h = harness({ config: { webappUrl: "https://example.pages.dev/" } });
   h.say("/start");
   assert.equal(h.say("/app")[0].payload.reply_markup.keyboard[0][0].web_app.url,
-    "https://example.pages.dev/?pro=1");
+    "https://example.pages.dev/?pro=1&plan=trial&days=14&price=100");
   h.clock.now += 20 * DAY;
   assert.equal(h.say("/app")[0].payload.reply_markup.keyboard[0][0].web_app.url,
-    "https://example.pages.dev/?pro=0");
+    "https://example.pages.dev/?pro=0&plan=expired&price=100");
 
   // An edited client can still submit a locked scale: the bot is the gate.
   const submitted = h.router.handleUpdate({
@@ -2472,7 +2478,7 @@ test("contact: the username defaults to the owner's account and is validated", (
 test("webapp: the app's copies of the shared definitions are identical to the bot's", () => {
   assert.deepEqual(staleCopies(), [], "run node telegram-bot/webapp/build.mjs after changing a shared file in src/");
   assert.equal(isCurrent(), true);
-  assert.deepEqual(SHARED.map((entry) => entry.name), ["instruments.mjs", "selfhelp.mjs"]);
+  assert.deepEqual(SHARED.map((entry) => entry.name), ["instruments.mjs", "selfhelp.mjs", "offer.mjs"]);
   SHARED.forEach((entry) => assert.equal(readFileSync(entry.copy, "utf8"), readFileSync(entry.source, "utf8")));
 });
 
@@ -2707,9 +2713,10 @@ test("webapp: /start offers the launch button only when a URL is configured", ()
   const started = withApp.say("/start");
   const keyboard = started[0].payload.reply_markup.keyboard;
   // The lock state rides along in the query string as a hint for the window.
-  assert.equal(keyboard[0][0].web_app.url, "https://example.pages.dev/?pro=1");
+  assert.equal(keyboard[0][0].web_app.url, "https://example.pages.dev/?pro=1&plan=trial&days=14&price=100");
   assert.match(keyboard[0][0].text, /Відкрити застосунок/);
-  assert.deepEqual(keyboard[1], [{ text: "🆘 Мені зараз погано" }], "the SOS button sits under the app button");
+  assert.deepEqual(keyboard[1], [{ text: "⭐ Повний доступ" }], "the offer sits under the app button");
+  assert.deepEqual(keyboard[2], [{ text: "🆘 Мені зараз погано" }], "and SOS stays the bottom row, on its own");
   assert.equal(started[0].payload.reply_markup.is_persistent, true);
   assert.match(lastText(started), /вікно поверх чату/);
   assert.match(lastText(withApp.say("/app")), /Відкрити застосунок/);
@@ -2718,7 +2725,7 @@ test("webapp: /start offers the launch button only when a URL is configured", ()
   const plain = chatOnly.say("/start");
   assert.equal(plain.length, 2);
   assert.ok(plain[0].payload.reply_markup.inline_keyboard, "the chat flow keeps its inline buttons");
-  assert.deepEqual(plain[1].payload.reply_markup.keyboard, [[{ text: "🆘 Мені зараз погано" }]]);
+  assert.deepEqual(plain[1].payload.reply_markup.keyboard, [[{ text: "⭐ Повний доступ" }], [{ text: "🆘 Мені зараз погано" }]]);
   assert.match(lastText(chatOnly.say("/app")), /не налаштований/);
 });
 
@@ -3354,6 +3361,128 @@ test("deploy: the off-machine backup reads its key where the sandboxed unit can 
   assert.match(backup, /SSH_DIR:-\/var\/lib\/gad7-phq9-bot\/\.ssh/);
   assert.match(backup, /-i "\$SSH_DIR\/id_ed25519"/);
   assert.match(guide, /\/var\/lib\/gad7-phq9-bot\/\.ssh\/id_ed25519/);
+});
+
+// --------------------------------------------------------------- access button
+
+test("access: the button under the input shows what the purchase opens, the price and a pay button", () => {
+  const h = harness();
+  h.say("/start");
+  assert.ok(isAccessText(ACCESS_BUTTON));
+  assert.ok(isAccessText("  Повний доступ "));
+  const offer = h.say(ACCESS_BUTTON);
+  assert.equal(offer.length, 1);
+  const text = offer[0].payload.text;
+  assert.match(text, /залишилося днів 14/);
+  [PCL5, WELLBEING, SLEEP, STRESS].forEach((instrument) => assert.match(text, new RegExp(instrument.title)));
+  assert.match(text, /щоденна відмітка настрою/);
+  assert.match(text, /Що назавжди безкоштовно/);
+  assert.match(text, /<b>100 зірок одноразово, без підписки<\/b>/);
+  assert.match(text, /\/paysupport/);
+  assert.match(text, /кабінет із клієнтами і сповіщеннями: \/psy/, "specialists find their subscription from here");
+  const button = offer[0].payload.reply_markup.inline_keyboard[0][0];
+  assert.equal(button.callback_data, "pay|start");
+  assert.equal(button.text, "Відкрити повний доступ за 100 зірок");
+  assert.equal(h.tap("pay|start")[1].method, "sendInvoice");
+  assert.deepEqual(textsOf(h.say("/buy")), textsOf(offer), "/buy is the same screen");
+
+  h.clock.now += 20 * DAY;
+  const lapsed = h.say(ACCESS_BUTTON);
+  assert.match(lapsed[0].payload.text, /Безкоштовний період закінчився/);
+  assert.equal(lapsed[0].payload.reply_markup.inline_keyboard[0][0].callback_data, "pay|start");
+});
+
+test("access: once bought, the screen says so, and the keyboard drops the button", () => {
+  const withApp = harness({ config: { webappUrl: "https://example.pages.dev/" } });
+  withApp.say("/start");
+  grantAccess(withApp.store, 777, withApp.clock.now);
+  const bought = withApp.say(ACCESS_BUTTON);
+  assert.match(bought[0].payload.text, /Відкрито назавжди/);
+  assert.match(bought[0].payload.text, /Що входить/);
+  assert.doesNotMatch(bought[0].payload.text, /Ціна|безкоштовно/);
+  assert.equal(bought[0].payload.reply_markup, undefined, "nothing left to pay");
+  const rows = withApp.say("/start")[0].payload.reply_markup.keyboard;
+  assert.deepEqual(rows.map((row) => row[0].text), ["Відкрити застосунок", "🆘 Мені зараз погано"]);
+  assert.match(rows[0][0].web_app.url, /[?&]plan=pro&price=100$/);
+
+  const chatOnly = harness();
+  chatOnly.say("/start");
+  grantAccess(chatOnly.store, 777, chatOnly.clock.now);
+  assert.deepEqual(chatOnly.say("/start")[1].payload.reply_markup.keyboard, [[{ text: "🆘 Мені зараз погано" }]]);
+});
+
+test("access: the button is never taken as an answer, a note, a booking request or an application", () => {
+  const h = harness({ config: { contact: { username: "helper_psy", name: "Олексій", role: "психолог" } } });
+  h.say("/start");
+  h.say("/gad7");
+  assert.match(h.say(ACCESS_BUTTON)[0].payload.text, /Що відкривається/);
+  assert.equal(h.sessions.get(777, h.clock.now).index, 0, "the questionnaire waits where it was");
+  h.say("2");
+  assert.equal(h.sessions.get(777, h.clock.now).index, 1);
+
+  const noted = harness();
+  completeViaKeyboard(noted, GAD7, [1, 1, 1, 1, 1, 1, 1]);
+  noted.say(ACCESS_BUTTON);
+  assert.equal(noted.store.lastResult(777, "gad7").note, undefined, "not saved as the weekly note");
+
+  h.say("/cancel");
+  h.say("/book");
+  h.tap("b|f|online");
+  h.tap("b|t|day");
+  h.say(ACCESS_BUTTON);
+  const booking = h.sessions.booking(777, h.clock.now);
+  assert.equal(booking.step, "request");
+  assert.equal(booking.request, null, "not taken as the request text");
+
+  h.tap("py|apply");
+  h.say(ACCESS_BUTTON);
+  assert.equal(h.sessions.application(777, h.clock.now).step, "name", "not taken as the applicant's name");
+});
+
+test("access: the chat, the paywall and the app promise the same things", () => {
+  const unlocked = unlockedLines();
+  INSTRUMENT_LIST.filter((instrument) => instrument.paid).forEach((instrument) => {
+    assert.ok(unlocked.some((line) => line.indexOf(instrument.title + ":") === 0), instrument.id);
+  });
+  INSTRUMENT_LIST.filter((instrument) => !instrument.paid).forEach((instrument) => {
+    assert.ok(freeLines().some((line) => line.indexOf(instrument.title + ":") === 0), instrument.id);
+  });
+  const price = fixtureConfig().price;
+  const offer = accessOffer(price, { kind: "trial", daysLeft: 3, active: true });
+  const locked = paywall(price, { kind: "expired", daysLeft: 0, active: false });
+  unlocked.concat(freeLines()).forEach((line) => {
+    assert.ok(offer.indexOf(escapeHtml(line)) !== -1, "offer: " + line);
+    assert.ok(locked.indexOf(escapeHtml(line)) !== -1, "paywall: " + line);
+  });
+});
+
+test("webapp: the app's pay button asks the bot for the invoice", () => {
+  assert.deepEqual(parseWebAppPayload(JSON.stringify({ v: 1, type: "buy" })), { ok: true, payload: { type: "buy" } });
+  const h = harness({ config: { webappUrl: "https://example.pages.dev/" } });
+  h.say("/start");
+  const buy = (id) => h.router.handleUpdate({
+    update_id: id,
+    message: { message_id: 1, chat: h.chat, web_app_data: { data: JSON.stringify({ v: 1, type: "buy" }) } },
+  });
+  const invoice = buy(40);
+  assert.equal(invoice[0].method, "sendInvoice");
+  assert.equal(invoice[0].payload.payload, "pro-v1:777", "the invoice is built for the sender, never from the payload");
+  grantAccess(h.store, 777, h.clock.now);
+  assert.match(lastText(buy(41)), /уже відкритий/);
+});
+
+test("webapp: the access screen reads the shared offer and pays through the bot", () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const html = readFileSync(join(here, "..", "webapp", "index.html"), "utf8");
+  const app = readFileSync(join(here, "..", "webapp", "app.js"), "utf8");
+  assert.match(html, /<div id="access" class="screen">/);
+  const menu = html.slice(html.indexOf('id="home-menu"'));
+  assert.ok(menu.indexOf('id="mood-card"') < menu.indexOf('id="access-card"'), "the offer sits under the locked items");
+  assert.ok(html.indexOf('id="access-pay"') < html.indexOf('id="access-free-card"'), "the pay button comes before the fine print");
+  assert.match(app, /from "\.\/offer\.mjs"/);
+  assert.match(app, /submit\(\{ type: "buy" \}\)/);
+  assert.doesNotMatch(app, /щоденна відмітка настрою|Відкрито назавжди|одноразово, без підписки/, "the app restates no shared text");
+  assert.doesNotMatch(app, /командою \/buy/, "a lock opens the offer instead of pointing at a command");
 });
 
 // --------------------------------------------------------------- runner

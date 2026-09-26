@@ -41,6 +41,8 @@ export function parseWebAppPayload(raw) {
   if (parsed.type === "mood") return parseMood(parsed);
   if (parsed.type === "report") return { ok: true, payload: { type: "report", includeNotes: parsed.notes === true } };
   if (parsed.type === "book") return parseBooking(parsed);
+  // The pay button. It carries nothing: the invoice is built for the sender.
+  if (parsed.type === "buy") return { ok: true, payload: { type: "buy" } };
   return fail("unknown payload type " + String(parsed.type));
 }
 

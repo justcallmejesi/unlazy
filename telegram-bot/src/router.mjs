@@ -16,7 +16,8 @@ import {
   exportCaption, exportJson, exportMessage,
   greeting, helpText, historyMessages, lastMessages, noteKeyboard, noteQuestion, noteSaved,
   noteSkipped, questionText, reminderStatus, resultMessage, startKeyboard, unknownInput,
-  alreadyPro, buyKeyboard, contactUnavailable, duplicatePurchase, helpKeyboard, helpOffer, helpRequestText,
+  accessOffer, alreadyPro, buyKeyboard, contactUnavailable, duplicatePurchase, helpKeyboard, helpOffer,
+  helpRequestText, isAccessText,
   paySupport, paySupportDraft, paySupportKeyboard,
   paywall, purchaseThanks, trialNotice, weekdayWords,
   bookingDraft, bookingExpired, bookingFormatKeyboard, bookingIntro, bookingReady, bookingRequestKeyboard,
@@ -128,7 +129,9 @@ export function createRouter(context) {
   function appUrl(state) {
     if (!config.webappUrl) return null;
     const separator = config.webappUrl.indexOf("?") === -1 ? "?" : "&";
-    let url = config.webappUrl + separator + "pro=" + (state.active ? "1" : "0");
+    let url = config.webappUrl + separator + "pro=" + (state.active ? "1" : "0") + "&plan=" + state.kind;
+    if (state.kind === "trial") url += "&days=" + state.daysLeft;
+    url += "&price=" + Number(config.price.stars);
     const contact = config.contact;
     if (contact && contact.username) {
       url += "&c=" + encodeURIComponent(contact.username);
@@ -523,6 +526,20 @@ export function createRouter(context) {
     return [send(chatId, paywall(config.price, state), { reply_markup: buyKeyboard(config.price) })];
   }
 
+  // "⭐ Повний доступ" and /buy: the whole offer, with the pay button unless
+  // it is already bought.
+  function accessActions(chatId) {
+    startTrialFor(chatId);
+    const state = access(chatId);
+    const text = accessOffer(config.price, state);
+    return [state.kind === "pro" ? send(chatId, text) : send(chatId, text, { reply_markup: buyKeyboard(config.price) })];
+  }
+
+  // The reply keyboard offers "⭐ Повний доступ" to anyone who has not bought.
+  function replyKeyboard(state) {
+    return appKeyboard(appUrl(state), state.kind !== "pro");
+  }
+
   function reminderLine(chatId) {
     const user = store.user(chatId);
     const schedule = resolveSchedule(user, config.reminder);
@@ -671,30 +688,26 @@ export function createRouter(context) {
         const hello = send(chatId,
           greeting(message && message.from && message.from.first_name, scheduleFor(chatId),
             { extra: trialNotice(state, config.price), remindersActive: state.active }),
-          { reply_markup: config.webappUrl ? appKeyboard(appUrl(state)) : startKeyboard(state.active) });
+          { reply_markup: config.webappUrl ? replyKeyboard(state) : startKeyboard(state.active) });
         // Without the app the chat flow is the whole product, so the inline
         // start buttons stay the entry point, and a second message carries the
         // reply keyboard with "Мені зараз погано".
         return config.webappUrl
           ? [hello, send(chatId, appIntro())]
-          : [hello, send(chatId, sosHint(), { reply_markup: appKeyboard(null) })];
+          : [hello, send(chatId, sosHint(), { reply_markup: replyKeyboard(state) })];
       }
       case "app":
         if (!config.webappUrl) {
           return [send(chatId, "Застосунок не налаштований. Опитувальники доступні тут: /gad7, /phq9.")];
         }
         startTrialFor(chatId);
-        return [send(chatId, appIntro(), { reply_markup: appKeyboard(appUrl(access(chatId))) })];
+        return [send(chatId, appIntro(), { reply_markup: replyKeyboard(access(chatId)) })];
       case "help":
         return [send(chatId, helpText(), { reply_markup: startKeyboard(access(chatId).active) })];
       case "about":
         return [send(chatId, aboutText(reminderLine(chatId)))];
-      case "buy": {
-        startTrialFor(chatId);
-        const state = access(chatId);
-        if (state.kind === "pro") return [send(chatId, alreadyPro())];
-        return locked(chatId, state);
-      }
+      case "buy":
+        return accessActions(chatId);
       case "paysupport": {
         const owner = config.admin && config.admin.username ? config.admin.username : null;
         if (!owner) return [send(chatId, paySupport(config.price, null))];
@@ -852,6 +865,12 @@ export function createRouter(context) {
       return { actions: reportActions(chatId, payload.includeNotes), payload };
     }
 
+    // The app's pay button. The window has closed by now, so the invoice
+    // arrives in the chat.
+    if (payload.type === "buy") {
+      return { actions: handleInvoice(chatId), payload };
+    }
+
     if (payload.type === "book") {
       if (!config.contact || !config.contact.username) return { actions: [send(chatId, contactUnavailable())], payload };
       return {
@@ -924,7 +943,7 @@ export function createRouter(context) {
     if (record.duplicateChargeId) return [send(chatId, duplicatePurchase(record.duplicateChargeId))];
     const state = access(chatId);
     return [send(chatId, purchaseThanks(config.price), {
-      reply_markup: config.webappUrl ? appKeyboard(appUrl(state)) : startKeyboard(true),
+      reply_markup: config.webappUrl ? replyKeyboard(state) : startKeyboard(true),
     })];
   }
 
@@ -941,6 +960,8 @@ export function createRouter(context) {
     if (message.successful_payment) return handleSuccessfulPayment(chatId, message.successful_payment);
     if (message.web_app_data) return handleWebAppData(chatId, message.web_app_data.data).actions;
     if (isSosText(text)) return sosActions(chatId);
+    // A keyboard button, so it is never an answer, a note or a request text.
+    if (isAccessText(text)) return accessActions(chatId);
     if (parsed) return handleCommand(chatId, parsed, message);
     const application = sessions.application(chatId, now());
     if (application) return applicationText(chatId, application, text);

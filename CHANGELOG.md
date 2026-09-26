@@ -6,6 +6,7 @@ This section describes the current source tree. It does not claim that `2.1.0` h
 
 ### Telegram screening bot
 
+- Add "⭐ Повний доступ": a reply-keyboard button for anyone who has not bought, a Mini App card and `/buy` open one screen with where access stands, what the purchase opens, what stays free, the price and the pay button. The app pays through `sendData` with `{"type": "buy"}`, and a locked scale in the app opens this screen instead of an alert. The lists live in `src/offer.mjs`, copied into the app, so chat, paywall and app promise the same things. The launch URL now carries `plan`, `days` and `price`.
 - Fix a reminder sent twice in the hour before the first slot after the October clock change. Each candidate slot is now resolved in the offset in effect at that slot; two million instants around both 2026 transitions, in five zones including a half-hour one, agree with an Intl oracle.
 - Fix a Bot API call that never settled when the connection dropped mid-response, which froze the poll loop while systemd saw a live process. Overlapping reminder sweeps no longer remind the same chats twice.
 - Answer pre-checkout queries before the rest of a batch, so slow sends cannot push a payment past Telegram's ten seconds. Refuse a second one-time purchase at pre-checkout; one that still lands keeps the first charge and asks for a refund.

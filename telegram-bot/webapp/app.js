@@ -15,6 +15,7 @@ import {
   BOOKING_FORMATS, BOOKING_TIMES, MOOD_MAX, MOOD_MIN, MOOD_TAGS, PRACTICE_IDS, PRACTICES, SOS_EMERGENCY,
   SOS_INTRO, SOS_STEPS, SOS_TITLE, practicesFor,
 } from "./selfhelp.mjs";
+import { OFFER_TITLE, freeLines, offerStatus, payLabel, priceLine, unlockedLines } from "./offer.mjs";
 
 // One hue per scale. On a light surface the four clear every check; on the
 // dark surface the navy and the light blue sit closer than the separation
@@ -36,6 +37,11 @@ const $ = (id) => document.getElementById(id);
 // changes nothing but the labels.
 const PARAMS = new URLSearchParams(window.location.search);
 const UNLOCKED = PARAMS.get("pro") !== "0";
+// Where access stands and what it costs, for the "Повний доступ" screen. A bot
+// older than that screen sends neither, and the screen then says less.
+const PLAN = ["pro", "trial", "expired", "none"].indexOf(PARAMS.get("plan")) === -1 ? null : PARAMS.get("plan");
+const DAYS_LEFT = Math.max(0, parseInt(PARAMS.get("days"), 10) || 0);
+const PRICE = /^[1-9][0-9]{0,4}$/.test(PARAMS.get("price") || "") ? Number(PARAMS.get("price")) : null;
 // The public contact for "Мені зараз погано" and booking, when the bot has one.
 // Checked against Telegram's username rules before it goes into a link.
 const CONTACT = /^[A-Za-z0-9_]{4,32}$/.test(PARAMS.get("c") || "")
@@ -296,7 +302,7 @@ function renderHome() {
     button.appendChild(tail);
     button.addEventListener("click", () => {
       if (locked) {
-        window.alert("Ця шкала входить у повний доступ. Відкрийте його в чаті командою /buy.");
+        openAccess("Ця шкала входить у повний доступ.");
         return;
       }
       startQuiz(instrument.id);
@@ -308,6 +314,57 @@ function renderHome() {
   $("mood-tail").className = state.unlocked ? "chev" : "lock";
   $("mood-tail").textContent = state.unlocked ? "›" : "🔒";
   $("booking-card").hidden = !CONTACT;
+  $("access-hint").textContent = accessHint();
+}
+
+// ----------------------------------------------------------------- access
+
+function accessHint() {
+  if (PLAN === "pro") return "відкрито назавжди";
+  if (PLAN === "trial") return "безкоштовний період, залишилося днів " + DAYS_LEFT;
+  return PRICE ? priceLine(PRICE) : "що входить і оплата";
+}
+
+function fillList(list, lines) {
+  list.textContent = "";
+  lines.forEach((line) => {
+    const item = document.createElement("li");
+    item.textContent = line;
+    list.appendChild(item);
+  });
+}
+
+// `reason` says which lock brought the person here, or is empty.
+function renderAccess(reason) {
+  const bought = PLAN === "pro";
+  $("access-title").textContent = OFFER_TITLE;
+  $("access-reason").hidden = !reason;
+  $("access-reason").textContent = reason || "";
+  const status = offerStatus(PLAN, DAYS_LEFT);
+  $("access-status").hidden = !status;
+  $("access-status").textContent = status;
+  $("access-open-title").textContent = bought ? "Що входить" : "Що відкривається";
+  fillList($("access-open"), unlockedLines());
+  $("access-free-card").hidden = bought;
+  fillList($("access-free"), freeLines());
+  const price = $("access-price");
+  price.hidden = bought || !PRICE;
+  price.textContent = "";
+  if (PRICE && !bought) {
+    const amount = document.createElement("b");
+    amount.textContent = priceLine(PRICE);
+    price.append("Ціна: ", amount, ". Оплата зірками Telegram.");
+  }
+  $("access-pay").hidden = bought;
+  $("access-pay").textContent = PRICE ? payLabel(PRICE) : "Відкрити повний доступ";
+  $("access-note").textContent = bought
+    ? "Питання щодо оплати: /paysupport у чаті."
+    : "Вікно закриється, а рахунок прийде в чат. Повернення протягом 14 днів: /paysupport у чаті.";
+}
+
+function openAccess(reason) {
+  renderAccess(reason);
+  show("access");
 }
 
 // ----------------------------------------------------------------- self-help
@@ -367,8 +424,7 @@ function openContact() {
 
 function renderMood() {
   if (!state.unlocked) {
-    window.alert("Відмітка настрою входить у повний доступ. Відкрийте його в чаті командою /buy.");
-    show("home");
+    openAccess("Відмітка настрою входить у повний доступ.");
     return;
   }
   state.mood = { rating: null, tags: [] };
@@ -780,9 +836,9 @@ async function renderStats() {
   renderTiles($("stats-tiles"), state.results, state.moods);
   const locked = $("stats-locked");
   locked.hidden = state.unlocked;
+  $("stats-access").hidden = state.unlocked;
   if (!state.unlocked) {
-    locked.textContent = "Повна статистика, додаткові шкали і відмітка настрою входять у повний доступ. " +
-      "Відкрийте його в чаті командою /buy.";
+    locked.textContent = "Повна статистика, додаткові шкали і відмітка настрою входять у повний доступ.";
   }
   const charts = $("stats-charts");
   charts.textContent = "";
@@ -952,6 +1008,7 @@ Array.prototype.forEach.call(document.querySelectorAll("[data-go]"), (node) => {
     if (target === "sos") renderSos();
     if (target === "practices") renderPractices();
     if (target === "booking") renderBooking();
+    if (target === "access") renderAccess("");
     if (target === "mood") {
       renderMood();
       if (!state.unlocked) return;
@@ -1024,6 +1081,9 @@ $("book-send").addEventListener("click", () => {
 });
 
 $("data-export").addEventListener("click", exportFile);
+$("stats-access").addEventListener("click", () => openAccess(""));
+// The invoice is the bot's to send: the window closes and it arrives in the chat.
+$("access-pay").addEventListener("click", () => submit({ type: "buy" }));
 $("data-import-go").addEventListener("click", importFromChat);
 
 // The bot asks again in the chat before touching its own copy, but the app's

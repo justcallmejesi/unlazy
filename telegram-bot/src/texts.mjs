@@ -10,6 +10,12 @@ import {
 import { formatLocalDateTime, formatTimeOfDay, formatUtcOffset, offsetAt } from "./reminders.mjs";
 import { MAX_NOTE_LENGTH } from "./store.mjs";
 import {
+  OFFER_TITLE, freeLines, offerStatus, payLabel, priceLine as offerPriceLine, starWord, unlockedLines,
+} from "./offer.mjs";
+
+// Re-exported: psytexts and the tests take the plural from here.
+export { starWord };
+import {
   BOOKING_FORMATS, BOOKING_TIMES, MOOD_CRISIS, MOOD_LOW, MOOD_TAGS, PRACTICE_IDS, PRACTICES, SOS_BUTTON,
   SOS_EMERGENCY, SOS_INTRO, SOS_STEPS, SOS_TITLE, bookingOption, moodTag,
 } from "./selfhelp.mjs";
@@ -69,7 +75,7 @@ export const COMMANDS = [
   { command: "export", description: "Вивантажити мої дані у JSON" },
   { command: "delete", description: "Видалити всі мої дані" },
   { command: "cancel", description: "Перервати поточний опитувальник" },
-  { command: "buy", description: "Повний доступ: шкали сну і стресу" },
+  { command: "buy", description: "Повний доступ: що входить і оплата" },
   { command: "contact", description: "Звернутися за допомогою" },
   { command: "paysupport", description: "Питання щодо оплати і повернення" },
   { command: "about", description: "Про тести і про те, що зберігає бот" },
@@ -161,17 +167,8 @@ export function aboutText(reminderLine) {
   ].join("\n");
 }
 
-export function starWord(stars) {
-  const last = stars % 10;
-  const tens = stars % 100;
-  if (tens >= 11 && tens <= 14) return "зірок";
-  if (last === 1) return "зірка";
-  if (last >= 2 && last <= 4) return "зірки";
-  return "зірок";
-}
-
 export function priceLine(price) {
-  return price.stars + " " + starWord(price.stars) + " одноразово, без підписки";
+  return offerPriceLine(price.stars);
 }
 
 export function trialNotice(entitlementState, price) {
@@ -188,35 +185,54 @@ export function paywall(price, entitlementState) {
   } else {
     lines.push("Ця частина входить у повний доступ.");
   }
-  lines.push("");
-  lines.push("<b>Що відкривається</b>");
-  PAID_INSTRUMENT_LIST.forEach((instrument) => {
-    lines.push("• " + escapeHtml(instrument.title) + ": " + escapeHtml(instrument.subtitle));
-  });
-  lines.push("• щоденна відмітка настрою з графіком");
-  lines.push("• історія всіх проходжень і статистика з графіками");
-  lines.push("• щотижневе нагадування і його налаштування");
-  lines.push("");
-  lines.push("<b>Що назавжди безкоштовно</b>");
-  FREE_INSTRUMENT_LIST.forEach((instrument) => {
-    lines.push("• " + escapeHtml(instrument.title) + ": " + escapeHtml(instrument.subtitle) + ", сам тест і результат");
-  });
-  lines.push("• блок підтримки, якщо в PHQ-9 позначено ризик");
-  lines.push("• техніки самодопомоги і кнопка «Мені зараз погано»");
-  lines.push("• звіт для фахівця і запис на консультацію");
-  lines.push("• /export і /delete: Ваші дані завжди Ваші");
-  lines.push("");
-  lines.push("Ціна: <b>" + escapeHtml(priceLine(price)) + "</b>. Оплата зірками Telegram.");
-  return lines.join("\n");
+  return lines.concat("", offerLists(price)).join("\n");
+}
+
+function bullets(items) {
+  return items.map((item) => "• " + escapeHtml(item));
+}
+
+function offerLists(price) {
+  return ["<b>Що відкривається</b>"].concat(bullets(unlockedLines()), [
+    "",
+    "<b>Що назавжди безкоштовно</b>",
+  ], bullets(freeLines()), [
+    "",
+    "Ціна: <b>" + escapeHtml(priceLine(price)) + "</b>. Оплата зірками Telegram.",
+  ]);
+}
+
+// Under the input field for anyone who has not bought, so what the purchase
+// opens can be read at any time, not only when a lock is hit. Recognized
+// before anything else a message could mean, like "Мені зараз погано".
+export const ACCESS_BUTTON = "⭐ " + OFFER_TITLE;
+
+export function isAccessText(text) {
+  const trimmed = typeof text === "string" ? text.trim() : "";
+  return trimmed === ACCESS_BUTTON || trimmed === OFFER_TITLE;
+}
+
+// The screen behind that button and /buy: where access stands, what it opens,
+// what stays free, the price. `entitlementState` is billing.entitlement().
+export function accessOffer(price, entitlementState) {
+  const lines = ["<b>" + OFFER_TITLE + "</b>", ""];
+  const status = offerStatus(entitlementState.kind, entitlementState.daysLeft);
+  if (entitlementState.kind === "pro") {
+    return lines.concat([status, "", "<b>Що входить</b>"], bullets(unlockedLines()), [
+      "",
+      "Питання щодо оплати: /paysupport",
+    ]).join("\n");
+  }
+  if (status) lines.push(escapeHtml(status), "");
+  return lines.concat(offerLists(price), [
+    "Повернення протягом 14 днів: /paysupport",
+    "",
+    "Для психологів є окремий кабінет із клієнтами і сповіщеннями: /psy",
+  ]).join("\n");
 }
 
 export function buyKeyboard(price) {
-  return {
-    inline_keyboard: [[{
-      text: "Відкрити повний доступ за " + price.stars + " " + starWord(price.stars),
-      callback_data: "pay|start",
-    }]],
-  };
+  return { inline_keyboard: [[{ text: payLabel(price.stars), callback_data: "pay|start" }]] };
 }
 
 export function purchaseThanks(price) {
@@ -372,8 +388,12 @@ export function answerKeyboard(instrument, session) {
 //
 // The row under it is "Мені зараз погано", kept in reach at all times: it
 // arrives as a plain message, which the router answers before anything else.
-export function appKeyboard(webappUrl) {
+//
+// Between them, for anyone who has not bought, "⭐ Повний доступ". Never in
+// the same row as "Мені зараз погано", and gone once access is bought.
+export function appKeyboard(webappUrl, offer = true) {
   const rows = webappUrl ? [[{ text: "Відкрити застосунок", web_app: { url: webappUrl } }]] : [];
+  if (offer) rows.push([{ text: ACCESS_BUTTON }]);
   rows.push([{ text: SOS_BUTTON }]);
   return { keyboard: rows, resize_keyboard: true, is_persistent: true };
 }

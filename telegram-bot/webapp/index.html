@@ -136,6 +136,10 @@ figcaption .swatch { margin-right: 2px; }
 .menu-item .title { display: block; font-weight: 600; }
 .menu-item .hint { display: block; font-size: 13px; color: var(--ink-3); margin-top: 1px; }
 .menu-item .chev { color: var(--ink-3); flex: none; }
+.menu-item.access .glyph { color: var(--accent); }
+.bullets { margin: 0; padding-left: 20px; }
+.bullets li { margin: 4px 0; }
+#stats-access { margin: 0 0 12px; }
 
 button.primary, button.ghost, button.danger {
   width: 100%; font: inherit; font-weight: 600; border-radius: 12px; padding: 14px;
@@ -258,6 +262,11 @@ details.practice summary { font-weight: 600; cursor: pointer; }
       <svg class="glyph scale" style="--scale-color: var(--series-mood)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M9 14c.8 1 1.8 1.5 3 1.5s2.2-.5 3-1.5"/><path d="M9.5 10h0M14.5 10h0"/></svg>
       <span class="body"><span class="title">Настрій сьогодні</span><span class="hint">одна відмітка від 1 до 10</span></span>
       <span class="chev" id="mood-tail">›</span>
+    </button>
+    <button class="menu-item access" id="access-card" data-go="access">
+      <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/></svg>
+      <span class="body"><span class="title">Повний доступ</span><span class="hint" id="access-hint">що входить і оплата</span></span>
+      <span class="chev">›</span>
     </button>
     <button class="menu-item" data-go="practices">
       <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 12c2-4 4-4 6 0s4 4 6 0 3-3 4-1"/></svg>
@@ -395,10 +404,29 @@ details.practice summary { font-weight: 600; cursor: pointer; }
   <button class="back" data-go="home">‹ Назад</button>
   <h2>Статистика</h2>
   <div class="callout" id="stats-locked" hidden></div>
+  <button class="ghost" id="stats-access" hidden>Що входить у повний доступ</button>
   <div class="tile-row" id="stats-tiles"></div>
   <div id="stats-charts"></div>
   <p class="muted">Кожен опитувальник має власну шкалу, тому графіки окремі. Пунктир на кожному це його власний поріг, число біля нього на осі. На шкалі самопочуття вищий бал означає кращий стан.</p>
   <button class="ghost" data-go="history">Подивитися таблицею</button>
+</div>
+
+<div id="access" class="screen">
+  <button class="back" data-go="home">‹ Назад</button>
+  <h2 id="access-title">Повний доступ</h2>
+  <div class="callout" id="access-reason" hidden></div>
+  <p id="access-status" hidden></p>
+  <div class="card">
+    <h2 id="access-open-title">Що відкривається</h2>
+    <ul class="bullets" id="access-open"></ul>
+  </div>
+  <p id="access-price" hidden></p>
+  <button class="primary" id="access-pay">Відкрити повний доступ</button>
+  <p class="muted" id="access-note"></p>
+  <div class="card" id="access-free-card">
+    <h2>Що назавжди безкоштовно</h2>
+    <ul class="bullets" id="access-free"></ul>
+  </div>
 </div>
 
 <div id="history" class="screen">

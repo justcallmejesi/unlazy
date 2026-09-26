@@ -22,6 +22,7 @@ See `telegram-bot/README.md`. Locale-bearing values:
 | --- | --- |
 | Questionnaire items, options, severity bands | `telegram-bot/src/instruments.mjs` |
 | Practices, SOS steps, mood tags, booking options | `telegram-bot/src/selfhelp.mjs` |
+| What full access opens, what stays free, price wording | `telegram-bot/src/offer.mjs`, shared with the Mini App |
 | All user-facing copy | `telegram-bot/src/texts.mjs`, specialist mode and consent in `telegram-bot/src/psytexts.mjs`, plus inline strings in `telegram-bot/src/router.mjs` |
 | Crisis contacts | `DEFAULT_CRISIS_CONTACT` in `telegram-bot/src/config.mjs`, overridable with `CRISIS_CONTACT` |
 | Price, trial, entitlement | `telegram-bot/src/billing.mjs`, `PRICE_STARS` and `TRIAL_DAYS` |
@@ -52,6 +53,10 @@ feature to sell.
 Paid: the sleep, stress, PCL-5 and wellbeing scales, the daily mood check-in
 (`/mood`), history (`/results`, `/last`), statistics, the weekly reminder and
 its settings (`/remind`, `/tz`).
+
+The offer lives behind "⭐ Повний доступ": a reply-keyboard row for anyone who
+has not bought (never in the SOS row, gone after purchase), a Mini App card,
+and `/buy`. It is a one-time purchase, so it is never labelled a subscription.
 
 Specialist mode is a separate monthly Stars subscription, `PSY_PRICE_STARS` 177,
 sold through `createInvoiceLink` with `subscription_period`. Who pays: a client
