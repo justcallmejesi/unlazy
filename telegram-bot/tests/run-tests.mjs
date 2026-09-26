@@ -1158,9 +1158,9 @@ test("runtime: an action's follow-up runs on its result, which is how the invoic
   assert.equal(h.client.calls[1].payload.text, "https://t.me/$fakeinvoice");
 });
 
-test("config: the specialist price defaults to 177 Stars and stays under Telegram's cap", () => {
+test("config: the specialist price defaults to 300 Stars and stays under Telegram's cap", () => {
   const config = loadConfig({ BOT_TOKEN: FAKE_TOKEN }, { envFile: false });
-  assert.equal(config.psy.stars, 177);
+  assert.equal(config.psy.stars, 300);
   assert.equal(config.admin.username, "justajsi", "the owner defaults to the contact");
   assert.equal(config.admin.chatId, null);
   assert.equal(loadConfig({ BOT_TOKEN: FAKE_TOKEN, ADMIN_CHAT_ID: "12345" }, { envFile: false }).admin.chatId, 12345);
@@ -3343,6 +3343,20 @@ test("config: the trial lasts 7 days unless TRIAL_DAYS says otherwise", () => {
   assert.equal(loadConfig(env({ TRIAL_DAYS: "14" }), { envFile: false }).price.trialDays, 14);
   const installer = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "deploy", "install.sh"), "utf8");
   assert.match(installer, /^TRIAL_DAYS=7$/m, "a fresh server starts with the same default");
+});
+
+test("config: full access costs 150 Stars and the cabinet 300 a month unless set otherwise", () => {
+  const env = (extra) => Object.assign({ BOT_TOKEN: FAKE_TOKEN, MEMORY_ONLY: "1" }, extra);
+  const config = loadConfig(env({}), { envFile: false });
+  assert.equal(config.price.stars, 150);
+  assert.equal(config.psy.stars, 300);
+  assert.match(config.price.description, /Одноразово, без підписки/);
+  assert.ok(config.price.description.length <= 255, "Telegram's cap for an invoice description");
+  const custom = loadConfig(env({ PRICE_STARS: "120", PSY_PRICE_STARS: "250" }), { envFile: false });
+  assert.deepEqual([custom.price.stars, custom.psy.stars], [120, 250]);
+  const installer = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "deploy", "install.sh"), "utf8");
+  assert.match(installer, /^PRICE_STARS=150$/m);
+  assert.match(installer, /^PSY_PRICE_STARS=300$/m);
 });
 
 test("config: an empty REMINDER_WEEKDAY keeps the Monday default", () => {

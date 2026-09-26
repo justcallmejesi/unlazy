@@ -41,7 +41,9 @@ fixed offset and opts out of seasonal changes until `/tz auto`.
 
 ## Paid model
 
-One-time purchase in Telegram Stars (`XTR`) after a 7-day trial.
+One-time purchase in Telegram Stars (`XTR`), 150 by default (`PRICE_STARS`), after a
+7-day trial. The developer receives $0.013 a Star whatever the buyer paid, so a
+price in Stars is not a price in hryvnias.
 
 Free forever, and it must stay that way: taking GAD-7 and PHQ-9, the result
 with its crisis block, the weekly note, `/export` and `/delete`, the self-help
@@ -58,7 +60,7 @@ The offer lives behind "⭐ Повний доступ": a reply-keyboard row for
 has not bought (never in the SOS row, gone after purchase), a Mini App card,
 and `/buy`. It is a one-time purchase, so it is never labelled a subscription.
 
-Specialist mode is a separate monthly Stars subscription, `PSY_PRICE_STARS` 177,
+Specialist mode is a separate monthly Stars subscription, `PSY_PRICE_STARS` 300,
 sold through `createInvoiceLink` with `subscription_period`. Who pays: a client
 pays for the paid features they use; a specialist pays for the cabinet (client
 list, cards, reports, alerts). The subscription unlocks nothing for clients.

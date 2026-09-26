@@ -132,7 +132,7 @@ export function loadConfig(env = process.env, options = {}) {
   if (rawAdminId && !/^\d{1,20}$/.test(rawAdminId)) {
     throw new Error("ADMIN_CHAT_ID must be a numeric Telegram user id");
   }
-  const psyStars = positiveInteger(env.PSY_PRICE_STARS, 177, "PSY_PRICE_STARS");
+  const psyStars = positiveInteger(env.PSY_PRICE_STARS, 300, "PSY_PRICE_STARS");
   if (psyStars > 10000) throw new Error("PSY_PRICE_STARS must be at most 10000, Telegram's cap for a subscription");
 
   const memoryOnly = /^(1|true|yes)$/i.test(String(env.MEMORY_ONLY || ""));
@@ -161,17 +161,19 @@ export function loadConfig(env = process.env, options = {}) {
       role: String(env.CONTACT_ROLE === undefined ? DEFAULT_CONTACT_ROLE : env.CONTACT_ROLE).trim(),
     },
     price: {
-      // Stars, not a minor currency unit. 100 Stars is roughly 100 UAH for the
-      // buyer; what reaches the operator is less, see the README.
-      stars: positiveInteger(env.PRICE_STARS, 100, "PRICE_STARS"),
+      // Stars, not a minor currency unit. The operator receives $0.013 a Star
+      // (Bot Platform Developer Terms 6.2.4), so 150 Stars nets $1.95. The
+      // buyer pays about $0.014 to $0.02 a Star, depending on where they buy
+      // them. Stars are not hryvnias: see the README before changing this.
+      stars: positiveInteger(env.PRICE_STARS, 150, "PRICE_STARS"),
       trialDays: positiveInteger(env.TRIAL_DAYS, 7, "TRIAL_DAYS"),
       title: String(env.PRICE_TITLE || "Повний доступ"),
       description: String(env.PRICE_DESCRIPTION ||
-        "Шкали сну і стресу, повна історія та статистика. Одноразово, без підписки."),
+        "Додаткові шкали, відмітка настрою, повна історія, статистика і нагадування. Одноразово, без підписки."),
     },
     admin: { username: adminUsername, chatId: rawAdminId ? Number(rawAdminId) : null },
-    // The monthly subscription for specialists. 177 Stars is roughly 177 UAH
-    // for the buyer, the same convention as the one-time price.
+    // The monthly subscription for specialists. 300 Stars nets $3.90 a month,
+    // which is what the owner set out to earn: about 177 UAH.
     psy: {
       stars: psyStars,
       title: String(env.PSY_PRICE_TITLE || "Кабінет фахівця"),
