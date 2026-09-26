@@ -41,7 +41,7 @@ fixed offset and opts out of seasonal changes until `/tz auto`.
 
 ## Paid model
 
-One-time purchase in Telegram Stars (`XTR`) after a 14-day trial.
+One-time purchase in Telegram Stars (`XTR`) after a 7-day trial.
 
 Free forever, and it must stay that way: taking GAD-7 and PHQ-9, the result
 with its crisis block, the weekly note, `/export` and `/delete`, the self-help

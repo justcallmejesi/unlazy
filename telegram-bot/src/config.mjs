@@ -164,7 +164,7 @@ export function loadConfig(env = process.env, options = {}) {
       // Stars, not a minor currency unit. 100 Stars is roughly 100 UAH for the
       // buyer; what reaches the operator is less, see the README.
       stars: positiveInteger(env.PRICE_STARS, 100, "PRICE_STARS"),
-      trialDays: positiveInteger(env.TRIAL_DAYS, 14, "TRIAL_DAYS"),
+      trialDays: positiveInteger(env.TRIAL_DAYS, 7, "TRIAL_DAYS"),
       title: String(env.PRICE_TITLE || "Повний доступ"),
       description: String(env.PRICE_DESCRIPTION ||
         "Шкали сну і стресу, повна історія та статистика. Одноразово, без підписки."),

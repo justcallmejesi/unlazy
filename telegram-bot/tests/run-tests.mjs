@@ -76,7 +76,7 @@ function fixtureConfig(overrides = {}) {
     botUsername: "test_bot",
     price: {
       stars: 100,
-      trialDays: 14,
+      trialDays: 7,
       title: "Повний доступ",
       description: "Шкали сну і стресу, повна історія та статистика.",
     },
@@ -730,7 +730,7 @@ test("webapp: a mood from the app is stored, a report is sent, a booking becomes
 test("webapp: the launch URL carries the public contact for the SOS screen", () => {
   const h = harness({ config: { webappUrl: "https://example.pages.dev/", contact: BOOKING_CONTACT } });
   const url = h.say("/start")[0].payload.reply_markup.keyboard[0][0].web_app.url;
-  assert.equal(url, "https://example.pages.dev/?pro=1&plan=trial&days=14&price=100&c=helper_psy&cn=" + encodeURIComponent("Олексій"));
+  assert.equal(url, "https://example.pages.dev/?pro=1&plan=trial&days=7&price=100&c=helper_psy&cn=" + encodeURIComponent("Олексій"));
 });
 
 // --------------------------------------------------------------- specialist mode
@@ -2080,8 +2080,8 @@ const DAY = 24 * 60 * 60 * 1000;
 test("paywall: /start opens a trial and says how long it lasts", () => {
   const h = harness();
   const started = h.say("/start");
-  assert.equal(h.store.user(777).trialEndsAt, WED_NOON_UTC + 14 * DAY);
-  assert.match(started[0].payload.text, /Безкоштовний період: залишилося днів 14/);
+  assert.equal(h.store.user(777).trialEndsAt, WED_NOON_UTC + 7 * DAY);
+  assert.match(started[0].payload.text, /Безкоштовний період: залишилося днів 7/);
   assert.match(started[0].payload.text, /100 зірок одноразово/);
   // The locked scales are marked in the keyboard, not hidden.
   const rows = started[0].payload.reply_markup.inline_keyboard;
@@ -2098,7 +2098,7 @@ test("paywall: the sleep and stress scales run during the trial and lock after i
   assert.match(lastText(h.say("/stress")), /Напруження/);
 
   // Two weeks and a minute later.
-  h.clock.now += 14 * DAY + 60000;
+  h.clock.now += 7 * DAY + 60000;
   const locked = h.say("/sleep");
   assert.match(lastText(locked), /Безкоштовний період закінчився/);
   assert.match(lastText(locked), /100 зірок одноразово/);
@@ -2283,7 +2283,7 @@ test("paywall: the window is told the state, and the bot still refuses a locked 
   const h = harness({ config: { webappUrl: "https://example.pages.dev/" } });
   h.say("/start");
   assert.equal(h.say("/app")[0].payload.reply_markup.keyboard[0][0].web_app.url,
-    "https://example.pages.dev/?pro=1&plan=trial&days=14&price=100");
+    "https://example.pages.dev/?pro=1&plan=trial&days=7&price=100");
   h.clock.now += 20 * DAY;
   assert.equal(h.say("/app")[0].payload.reply_markup.keyboard[0][0].web_app.url,
     "https://example.pages.dev/?pro=0&plan=expired&price=100");
@@ -2713,7 +2713,7 @@ test("webapp: /start offers the launch button only when a URL is configured", ()
   const started = withApp.say("/start");
   const keyboard = started[0].payload.reply_markup.keyboard;
   // The lock state rides along in the query string as a hint for the window.
-  assert.equal(keyboard[0][0].web_app.url, "https://example.pages.dev/?pro=1&plan=trial&days=14&price=100");
+  assert.equal(keyboard[0][0].web_app.url, "https://example.pages.dev/?pro=1&plan=trial&days=7&price=100");
   assert.match(keyboard[0][0].text, /Відкрити застосунок/);
   assert.deepEqual(keyboard[1], [{ text: "⭐ Повний доступ" }], "the offer sits under the app button");
   assert.deepEqual(keyboard[2], [{ text: "🆘 Мені зараз погано" }], "and SOS stays the bottom row, on its own");
@@ -3337,6 +3337,14 @@ test("webapp: reminder settings from the app are locked after the trial, like /r
   assert.equal(h.store.user(777).tzOffsetMinutes, null);
 });
 
+test("config: the trial lasts 7 days unless TRIAL_DAYS says otherwise", () => {
+  const env = (extra) => Object.assign({ BOT_TOKEN: FAKE_TOKEN, MEMORY_ONLY: "1" }, extra);
+  assert.equal(loadConfig(env({}), { envFile: false }).price.trialDays, 7);
+  assert.equal(loadConfig(env({ TRIAL_DAYS: "14" }), { envFile: false }).price.trialDays, 14);
+  const installer = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "deploy", "install.sh"), "utf8");
+  assert.match(installer, /^TRIAL_DAYS=7$/m, "a fresh server starts with the same default");
+});
+
 test("config: an empty REMINDER_WEEKDAY keeps the Monday default", () => {
   const env = (weekday) => ({ BOT_TOKEN: FAKE_TOKEN, MEMORY_ONLY: "1", REMINDER_WEEKDAY: weekday });
   assert.equal(loadConfig(env(""), { envFile: false }).reminder.weekday, MONDAY);
@@ -3373,7 +3381,7 @@ test("access: the button under the input shows what the purchase opens, the pric
   const offer = h.say(ACCESS_BUTTON);
   assert.equal(offer.length, 1);
   const text = offer[0].payload.text;
-  assert.match(text, /залишилося днів 14/);
+  assert.match(text, /залишилося днів 7/);
   [PCL5, WELLBEING, SLEEP, STRESS].forEach((instrument) => assert.match(text, new RegExp(instrument.title)));
   assert.match(text, /щоденна відмітка настрою/);
   assert.match(text, /Що назавжди безкоштовно/);

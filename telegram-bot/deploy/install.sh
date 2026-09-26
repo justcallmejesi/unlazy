@@ -102,7 +102,7 @@ WEBAPP_URL=
 
 # One-time full access price in Telegram Stars, and the free trial length.
 PRICE_STARS=100
-TRIAL_DAYS=14
+TRIAL_DAYS=7
 
 # Specialist cabinet: monthly subscription in Stars. The owner who approves
 # specialists defaults to CONTACT_USERNAME.
