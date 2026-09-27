@@ -180,6 +180,7 @@ journalctl -u gad7-phq9-backup -n 20
 | змінити ціну або пробний період | `PRICE_STARS` і `TRIAL_DAYS` там само |
 | повернути оплату | `curl -sS "https://api.telegram.org/bot$BOT_TOKEN/refundStarPayment" -d user_id=<id> -d telegram_payment_charge_id=<chargeId>` |
 | подивитися дані | `sudo ls -la /var/lib/gad7-phq9-bot/` |
+| скільки людей користуються ботом | `/stats` у самому боті, з акаунта власника |
 
 Нагадування приходить щопонеділка о 19:00 за київським часом. Переходи на літній і зимовий час бот враховує сам, через базу часових поясів системи, тому двічі на рік нічого правити не потрібно. Змінити день або час: `REMINDER_WEEKDAY` і `REMINDER_TIME` у `/etc/gad7-phq9-bot.env`.
 

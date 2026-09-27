@@ -65,7 +65,8 @@ sold through `createInvoiceLink` with `subscription_period`. Who pays: a client
 pays for the paid features they use; a specialist pays for the cabinet (client
 list, cards, reports, alerts). The subscription unlocks nothing for clients.
 The owner approves every specialist (`ADMIN_USERNAME`, bound to a chat id on
-first contact, or `ADMIN_CHAT_ID`) and uses the cabinet free. A specialist reads
+first contact, or `ADMIN_CHAT_ID`) and uses the cabinet free. `/stats` shows the
+owner counts only, never a name, a score or a note. A specialist reads
 a client only while approved, subscribed and holding that client's consent.
 The consent form is versioned by `CONSENT_VERSION` in `psy.mjs`: change the
 substance of the text, bump the version. Revoking stays one tap in `/privacy`.

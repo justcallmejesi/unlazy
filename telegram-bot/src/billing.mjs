@@ -12,6 +12,9 @@
 
 export const PAYLOAD_PREFIX = "pro-v1";
 export const DAY_MS = 24 * 60 * 60 * 1000;
+// What the developer receives per Star, whatever the buyer paid for it: Bot
+// Platform Developer Terms 6.2.4. Only used to show the owner an estimate.
+export const STAR_REWARD_USD = 0.013;
 
 // Free forever: taking GAD-7 and PHQ-9, the result with its crisis block and
 // the weekly note. Plus /export and /delete, which are access to one's own

@@ -46,6 +46,8 @@ import {
   ACCESS_BUTTON, MESSAGE_LIMIT, accessOffer, historyMessages, isAccessText, lastMessages, paywall, weeklyReminder,
 } from "../src/texts.mjs";
 import { freeLines, unlockedLines } from "../src/offer.mjs";
+import { collectStats } from "../src/stats.mjs";
+import { adminStats } from "../src/psytexts.mjs";
 import { psyClientsList } from "../src/psytexts.mjs";
 
 const filter = process.argv[2] || "";
@@ -3505,6 +3507,64 @@ test("webapp: the access screen reads the shared offer and pays through the bot"
   assert.match(app, /submit\(\{ type: "buy" \}\)/);
   assert.doesNotMatch(app, /щоденна відмітка настрою|Відкрито назавжди|одноразово, без підписки/, "the app restates no shared text");
   assert.doesNotMatch(app, /командою \/buy/, "a lock opens the offer instead of pointing at a command");
+});
+
+// --------------------------------------------------------------- owner stats
+
+test("stats: counts people, runs, access and cabinets, and names no one", () => {
+  const now = WED_NOON_UTC;
+  const iso = (ms) => new Date(ms).toISOString();
+  const base = (chatId, extra) => Object.assign({
+    chatId, firstSeenAt: null, remindersEnabled: true, trialEndsAt: null, pro: null,
+    results: [], moods: [], psy: null, shares: [],
+  }, extra);
+  const sub = (stars, expiresAt, canceled) => ({
+    firstChargeId: "s", lastChargeId: "s", expiresAt, stars, since: iso(now), canceled,
+  });
+  const users = [
+    base(1, { firstSeenAt: iso(now - DAY_MS), trialEndsAt: now + 6 * DAY_MS }),
+    base(2, {
+      firstSeenAt: iso(now - 40 * DAY_MS), trialEndsAt: now - 33 * DAY_MS,
+      moods: [{ date: "2026-09-01", rating: 5, tags: [], at: iso(now - 15 * DAY_MS) }],
+    }),
+    base(3, {
+      firstSeenAt: iso(now - 20 * DAY_MS), pro: { since: iso(now), stars: 150, chargeId: "c1" },
+      results: [
+        buildResult(GAD7, GAD7.items.map(() => 1), now - 2 * DAY_MS),
+        buildResult(PHQ9, PHQ9.items.map(() => 0), now - 9 * DAY_MS),
+      ],
+      shares: [{ psy: 5, clientName: "Оля", grantedAt: iso(now), version: CONSENT_VERSION, notes: false, revokedAt: null, revokedBy: null }],
+    }),
+    base(4, { psy: { status: "pending", name: "Марія Коваль" } }),
+    base(5, { psy: { status: "approved", name: "Анна", subscription: sub(300, now + 10 * DAY_MS, false) } }),
+    base(6, { psy: { status: "approved", name: "Ірина", subscription: sub(300, now + 3 * DAY_MS, true) } }),
+    base(7, { psy: { status: "approved", name: "Власник" } }),
+  ];
+  const stats = collectStats(users, now, (chatId) => chatId === 7);
+  assert.deepEqual(
+    [stats.users, stats.new7, stats.new30, stats.active7, stats.active30, stats.tested, stats.results, stats.moodUsers],
+    [7, 1, 2, 1, 2, 1, 2, 1]);
+  assert.deepEqual([stats.byInstrument.gad7, stats.byInstrument.phq9, stats.byInstrument.sleep], [1, 1, 0]);
+  assert.deepEqual([stats.trial, stats.expired, stats.pro, stats.proStars, stats.reminders], [1, 1, 1, 150, 2]);
+  assert.deepEqual([stats.psyPending, stats.psyApproved, stats.psySubscribed, stats.psyMonthlyStars, stats.clients],
+    [1, 3, 2, 300, 1], "the owner's free cabinet is no subscription, a canceled one does not renew");
+  const text = adminStats(stats);
+  assert.match(text, /Користувачів усього: <b>7<\/b>/);
+  assert.match(text, /Купили: 1, разом 150 зірок, це близько \$1\.95 для Вас/);
+  assert.match(text, /Щомісяця від підписок: 300 зірок, це близько \$3\.90 для Вас/);
+  assert.match(text, /GAD-7 1, PHQ-9 1, Сон 0/);
+  assert.doesNotMatch(text, /Марія|Анна|Ірина|Оля|Власник/, "counts only, never a name");
+});
+
+test("stats: /stats answers the owner only, and /admin points to it", () => {
+  const h = linkedHarness();
+  const text = lastText(h.owner.say("/stats"));
+  assert.match(text, /Статистика бота/);
+  assert.match(text, /з активною підпискою: 1/);
+  assert.match(text, /Клієнтів зі згодою фахівцю: 1/);
+  assert.doesNotMatch(text, /Анна|Оля/);
+  assert.match(lastText(h.client.say("/stats")), /лише для власника/);
+  assert.match(lastText(h.owner.say("/admin")), /Статистика бота: \/stats/);
 });
 
 // --------------------------------------------------------------- runner

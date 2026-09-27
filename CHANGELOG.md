@@ -6,6 +6,7 @@ This section describes the current source tree. It does not claim that `2.1.0` h
 
 ### Telegram screening bot
 
+- Add `/stats` for the owner: how many people, new and active in 7 and 30 days, runs per scale, trials, purchases, specialists, subscriptions and consented clients, with the Stars converted at $0.013. Counts only, never a name or a result. Anyone else gets the owner-only refusal, and `/admin` points to it.
 - Raise the default prices: full access 150 Stars once (`PRICE_STARS`), the specialist cabinet 300 Stars a month (`PSY_PRICE_STARS`), in the config and the installer's env template. At $0.013 a Star that nets $1.95 and $3.90; the old comments equated Stars with hryvnias, which they are not. The invoice description now names what full access opens instead of only the sleep and stress scales.
 - Shorten the default trial to 7 days (`TRIAL_DAYS`, and the installer's env template). A server whose env file already sets `TRIAL_DAYS` keeps that value, and trials already started keep their end date.
 - Add "⭐ Повний доступ": a reply-keyboard button for anyone who has not bought, a Mini App card and `/buy` open one screen with where access stands, what the purchase opens, what stays free, the price and the pay button. The app pays through `sendData` with `{"type": "buy"}`, and a locked scale in the app opens this screen instead of an alert. The lists live in `src/offer.mjs`, copied into the app, so chat, paywall and app promise the same things. The launch URL now carries `plan`, `days` and `price`.

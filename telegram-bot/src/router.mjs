@@ -31,13 +31,14 @@ import {
   getPractice, isSosText, practicesFor,
 } from "./selfhelp.mjs";
 import { buildReport } from "./report.mjs";
+import { collectStats } from "./stats.mjs";
 import {
   INVITE_PREFIX, MAX_APPLICATION_FIELD, TERMS_VERSION, activeShare, applySubscriptionPayment,
   checkSubscriptionPreCheckout, clientsOf, findSpecialistByCode, grantShare, isSubscriptionPayload,
   newInviteCode, psyState, revokeShare, setShareNotes, subscriptionInvoice,
 } from "./psy.mjs";
 import {
-  adminApplication, adminDecided, adminDecisionKeyboard, adminNoPending, clientDisconnectedByPsy,
+  adminApplication, adminDecided, adminDecisionKeyboard, adminNoPending, adminStats, clientDisconnectedByPsy,
   consentAlready, consentDeclined, consentDone, consentForm, consentInvalid, consentKeyboard,
   consentNotesKeyboard, consentNotesQuestion, consentOwnLink, inviteLink, notAdmin, notesChanged,
   privacyKeyboard, privacyMessage, psyAborted, psyActivated, psyAlert, psyApplied, psyApplyKeyboard,
@@ -363,6 +364,12 @@ export function createRouter(context) {
     const approved = users.filter((user) => user.psy && user.psy.status === "approved").length;
     if (!pending.length) return [send(chatId, adminNoPending(approved))];
     return pending.map((user) => send(chatId, adminApplication(user), { reply_markup: adminDecisionKeyboard(user.chatId) }));
+  }
+
+  // The owner's numbers, aggregates only.
+  function statsActions(chatId) {
+    if (!isAdmin(chatId)) return [send(chatId, notAdmin())];
+    return [send(chatId, adminStats(collectStats(store.allUsers(), now(), isAdmin)))];
   }
 
   function decide(chatId, targetId, approve) {
@@ -751,6 +758,8 @@ export function createRouter(context) {
         return privacyActions(chatId);
       case "admin":
         return adminList(chatId);
+      case "stats":
+        return statsActions(chatId);
       case "cancel": {
         const open = sessions.clearAll(chatId);
         if (open.session) return [send(chatId, "Опитувальник перервано. Відповіді не збережені.")];

@@ -7,6 +7,7 @@
 // consent, so any change of substance here must bump that version.
 
 import { escapeHtml } from "./telegram.mjs";
+import { INSTRUMENT_LIST } from "./instruments.mjs";
 import { packMessages, starWord } from "./texts.mjs";
 import { CONSENT_VERSION, INVITE_PREFIX } from "./psy.mjs";
 
@@ -266,7 +267,41 @@ export function adminDecisionKeyboard(chatId) {
 }
 
 export function adminNoPending(approvedCount) {
-  return "Нових заявок немає. Схвалених фахівців: " + approvedCount + ".";
+  return "Нових заявок немає. Схвалених фахівців: " + approvedCount + ".\nСтатистика бота: /stats";
+}
+
+function stars(count, usd) {
+  return count + " " + starWord(count) + ", це близько $" + usd.toFixed(2) + " для Вас";
+}
+
+// The owner's /stats: counts only, never a name or a result. See stats.mjs.
+export function adminStats(stats) {
+  const scales = INSTRUMENT_LIST.map((instrument) => instrument.title + " " + stats.byInstrument[instrument.id]);
+  return [
+    "<b>Статистика бота</b>",
+    "",
+    "Користувачів усього: <b>" + stats.users + "</b>",
+    "Нових за 7 днів: " + stats.new7 + ", за 30 днів: " + stats.new30,
+    "Проходили тест або відмічали настрій за 7 днів: " + stats.active7 + ", за 30 днів: " + stats.active30,
+    "",
+    "Пройшли хоча б один тест: " + stats.tested,
+    "Проходжень усього: " + stats.results + (stats.results ? " (" + escapeHtml(scales.join(", ")) + ")" : ""),
+    "Відмічали настрій: " + stats.moodUsers,
+    "Отримують щотижневе нагадування: " + stats.reminders,
+    "",
+    "<b>Повний доступ</b>",
+    "Пробний період зараз: " + stats.trial,
+    "Пробний закінчився, не купили: " + stats.expired,
+    "Купили: " + stats.pro + (stats.pro ? ", разом " + stars(stats.proStars, stats.proUsd) : ""),
+    "",
+    "<b>Кабінет фахівця</b>",
+    "Заявок чекають: " + stats.psyPending + (stats.psyPending ? ", розглянути: /admin" : ""),
+    "Схвалених фахівців: " + stats.psyApproved + ", з активною підпискою: " + stats.psySubscribed,
+    "Щомісяця від підписок: " + stars(stats.psyMonthlyStars, stats.psyMonthlyUsd),
+    "Клієнтів зі згодою фахівцю: " + stats.clients,
+    "",
+    "Лише кількості, без імен і результатів.",
+  ].join("\n");
 }
 
 export function adminDecided(name, approved) {
