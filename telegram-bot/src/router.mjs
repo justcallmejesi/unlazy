@@ -12,19 +12,19 @@ import {
   parseUtcOffset, resolveSchedule,
 } from "./reminders.mjs";
 import {
-  aboutText, answerKeyboard, appIntro, appKeyboard, appRejected, appResultSaved, EXPORT_INLINE_LIMIT,
+  aboutText, answerKeyboard, appIntro, appRejected, appResultSaved, EXPORT_INLINE_LIMIT,
   exportCaption, exportJson, exportMessage,
   greeting, helpText, historyMessages, lastMessages, noteKeyboard, noteQuestion, noteSaved,
   noteSkipped, questionText, reminderStatus, resultMessage, startKeyboard, unknownInput,
   accessOffer, alreadyPro, buyKeyboard, contactUnavailable, duplicatePurchase, helpKeyboard, helpOffer,
-  helpRequestText, isAccessText,
+  helpRequestText, isAccessText, menuKeyboard, menuTarget, menuText,
   paySupport, paySupportDraft, paySupportKeyboard,
   paywall, purchaseThanks, trialNotice, weekdayWords,
   bookingDraft, bookingExpired, bookingFormatKeyboard, bookingIntro, bookingReady, bookingRequestKeyboard,
   bookingRequestQuestion, bookingScoresKeyboard, bookingScoresQuestion, bookingTimeKeyboard,
   bookingTimeQuestion, latestScoreLines, moodDone, moodKeyboard, moodQuestion, moodSaved, moodTagKeyboard,
   practiceMessage, practicesMenu, practicesMenuKeyboard, practicesMessage, reportCaption, reportEmpty,
-  reportIntro, reportKeyboard, resultKeyboard, sosHint, sosKeyboard, sosMessage,
+  reportIntro, reportKeyboard, resultKeyboard, sosKeyboard, sosMessage,
 } from "./texts.mjs";
 import {
   BOOKING_FORMATS, BOOKING_TIMES, MAX_BOOKING_REQUEST, MOOD_LOW, MOOD_MAX, MOOD_MIN, bookingOption,
@@ -542,9 +542,28 @@ export function createRouter(context) {
     return [state.kind === "pro" ? send(chatId, text) : send(chatId, text, { reply_markup: buyKeyboard(config.price) })];
   }
 
-  // The reply keyboard offers "⭐ Повний доступ" to anyone who has not bought.
-  function replyKeyboard(state) {
-    return appKeyboard(appUrl(state), state.kind !== "pro");
+  // The menu under the input field. The main screen offers "⭐ Повний доступ"
+  // to anyone who has not bought; a section marks what is locked.
+  function menuOptions(chatId) {
+    const state = access(chatId);
+    return { webappUrl: appUrl(state), offer: state.kind !== "pro", unlocked: state.active, admin: isAdmin(chatId) };
+  }
+
+  function mainKeyboard(chatId) {
+    return menuKeyboard("main", menuOptions(chatId));
+  }
+
+  function menuActions(chatId, sectionId) {
+    startTrialFor(chatId);
+    const options = menuOptions(chatId);
+    return [send(chatId, menuText(sectionId, options), { reply_markup: menuKeyboard(sectionId, options) })];
+  }
+
+  // A tapped menu button: a screen, a questionnaire, or what its command does.
+  function menuTargetActions(chatId, target, message) {
+    if (target.section) return menuActions(chatId, target.section);
+    if (target.instrument) return startInstrument(chatId, getInstrument(target.instrument));
+    return handleCommand(chatId, { command: target.command, args: "" }, message);
   }
 
   function reminderLine(chatId) {
@@ -695,20 +714,19 @@ export function createRouter(context) {
         const hello = send(chatId,
           greeting(message && message.from && message.from.first_name, scheduleFor(chatId),
             { extra: trialNotice(state, config.price), remindersActive: state.active }),
-          { reply_markup: config.webappUrl ? replyKeyboard(state) : startKeyboard(state.active) });
-        // Without the app the chat flow is the whole product, so the inline
-        // start buttons stay the entry point, and a second message carries the
-        // reply keyboard with "Мені зараз погано".
-        return config.webappUrl
-          ? [hello, send(chatId, appIntro())]
-          : [hello, send(chatId, sosHint(), { reply_markup: replyKeyboard(state) })];
+          { reply_markup: startKeyboard(state.active) });
+        // The greeting keeps its inline shortcuts; the second message brings up
+        // the menu under the input field, with "Мені зараз погано" in reach.
+        return [hello].concat(menuActions(chatId, "main"));
       }
       case "app":
         if (!config.webappUrl) {
           return [send(chatId, "Застосунок не налаштований. Опитувальники доступні тут: /gad7, /phq9.")];
         }
         startTrialFor(chatId);
-        return [send(chatId, appIntro(), { reply_markup: replyKeyboard(access(chatId)) })];
+        return [send(chatId, appIntro(), { reply_markup: mainKeyboard(chatId) })];
+      case "menu":
+        return menuActions(chatId, "main");
       case "help":
         return [send(chatId, helpText(), { reply_markup: startKeyboard(access(chatId).active) })];
       case "about":
@@ -950,10 +968,7 @@ export function createRouter(context) {
     const record = applyPayment(store, chatId, payment, now());
     if (!record) return [send(chatId, "Платіж отримано, але я не зміг його прочитати. Напишіть у /paysupport.")];
     if (record.duplicateChargeId) return [send(chatId, duplicatePurchase(record.duplicateChargeId))];
-    const state = access(chatId);
-    return [send(chatId, purchaseThanks(config.price), {
-      reply_markup: config.webappUrl ? replyKeyboard(state) : startKeyboard(true),
-    })];
+    return [send(chatId, purchaseThanks(config.price), { reply_markup: mainKeyboard(chatId) })];
   }
 
   function handleMessage(message) {
@@ -969,8 +984,10 @@ export function createRouter(context) {
     if (message.successful_payment) return handleSuccessfulPayment(chatId, message.successful_payment);
     if (message.web_app_data) return handleWebAppData(chatId, message.web_app_data.data).actions;
     if (isSosText(text)) return sosActions(chatId);
-    // A keyboard button, so it is never an answer, a note or a request text.
+    // Keyboard buttons, so never an answer, a note or a request text.
     if (isAccessText(text)) return accessActions(chatId);
+    const target = menuTarget(text);
+    if (target) return menuTargetActions(chatId, target, message);
     if (parsed) return handleCommand(chatId, parsed, message);
     const application = sessions.application(chatId, now());
     if (application) return applicationText(chatId, application, text);

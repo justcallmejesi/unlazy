@@ -43,7 +43,8 @@ import { BotRuntime, buildBot } from "../bot.mjs";
 import { MAX_PAYLOAD_BYTES, parseWebAppPayload } from "../src/webapp.mjs";
 import { SHARED, isCurrent, staleCopies } from "../webapp/build.mjs";
 import {
-  ACCESS_BUTTON, MESSAGE_LIMIT, accessOffer, historyMessages, isAccessText, lastMessages, paywall, weeklyReminder,
+  ACCESS_BUTTON, COMMANDS, COMMAND_GROUPS, MENU_MAIN, MESSAGE_LIMIT, accessOffer, historyMessages, isAccessText,
+  lastMessages, menuKeyboard, menuTarget, paywall, weeklyReminder,
 } from "../src/texts.mjs";
 import { freeLines, unlockedLines } from "../src/offer.mjs";
 import { collectStats } from "../src/stats.mjs";
@@ -118,6 +119,9 @@ const lastText = (actions) => textsOf(actions)[textsOf(actions).length - 1];
 // means the score says so.
 const scoreText = (actions) => textsOf(actions).find((text) => text.indexOf("Бали:") !== -1);
 const methodsOf = (actions) => actions.map((action) => action.method);
+// The rows of the reply keyboard the last message in `actions` brought up.
+const menuOf = (actions) => actions.filter((action) => action.payload && action.payload.reply_markup &&
+  action.payload.reply_markup.keyboard).pop().payload.reply_markup.keyboard;
 
 // Answer every question of an instrument through the inline keyboard.
 function completeViaKeyboard(h, instrument, answers) {
@@ -731,7 +735,7 @@ test("webapp: a mood from the app is stored, a report is sent, a booking becomes
 
 test("webapp: the launch URL carries the public contact for the SOS screen", () => {
   const h = harness({ config: { webappUrl: "https://example.pages.dev/", contact: BOOKING_CONTACT } });
-  const url = h.say("/start")[0].payload.reply_markup.keyboard[0][0].web_app.url;
+  const url = menuOf(h.say("/start"))[0][0].web_app.url;
   assert.equal(url, "https://example.pages.dev/?pro=1&plan=trial&days=7&price=100&c=helper_psy&cn=" + encodeURIComponent("Олексій"));
 });
 
@@ -1660,7 +1664,8 @@ test("router: /start greets, registers the user, and offers both instruments", (
   // The greeting, then the reply keyboard that keeps "Мені зараз погано" in reach,
   // with the offer above it for anyone who has not bought.
   assert.deepEqual(methodsOf(actions), ["sendMessage", "sendMessage"]);
-  assert.deepEqual(actions[1].payload.reply_markup.keyboard, [[{ text: "⭐ Повний доступ" }], [{ text: "🆘 Мені зараз погано" }]]);
+  assert.deepEqual(actions[1].payload.reply_markup.keyboard, [[{ text: "📝 Тести" }, { text: "📈 Результати" }], [{ text: "🌿 Підтримка" }, { text: "⚙️ Налаштування" }],
+    [{ text: "⭐ Повний доступ" }, { text: "🧑‍⚕️ Для фахівців" }], [{ text: "🆘 Мені зараз погано" }]]);
   const text = actions[0].payload.text;
   assert.match(text, /Тест/);
   assert.match(text, /GAD-7/);
@@ -1935,7 +1940,7 @@ test("router: /results and /last read the stored history", () => {
   // History is part of the full access, so a fresh chat sees the offer first.
   assert.match(lastText(h.say("/results")), /Повний доступ/);
   h.say("/start");
-  assert.match(lastText(h.say("/results")), /ще немає проходжень/);
+  assert.match(lastText(h.say("/results")), /Ще немає проходжень/);
   assert.match(lastText(h.say("/last")), /немає даних/);
   completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
   const results = lastText(h.say("/results"));
@@ -2713,21 +2718,22 @@ test("webapp: deletion from the app asks in the chat instead of wiping at once",
 test("webapp: /start offers the launch button only when a URL is configured", () => {
   const withApp = harness({ config: { webappUrl: "https://example.pages.dev/" } });
   const started = withApp.say("/start");
-  const keyboard = started[0].payload.reply_markup.keyboard;
+  const keyboard = menuOf(started);
   // The lock state rides along in the query string as a hint for the window.
   assert.equal(keyboard[0][0].web_app.url, "https://example.pages.dev/?pro=1&plan=trial&days=7&price=100");
   assert.match(keyboard[0][0].text, /Відкрити застосунок/);
-  assert.deepEqual(keyboard[1], [{ text: "⭐ Повний доступ" }], "the offer sits under the app button");
-  assert.deepEqual(keyboard[2], [{ text: "🆘 Мені зараз погано" }], "and SOS stays the bottom row, on its own");
-  assert.equal(started[0].payload.reply_markup.is_persistent, true);
-  assert.match(lastText(started), /вікно поверх чату/);
+  assert.deepEqual(keyboard[3], [{ text: "⭐ Повний доступ" }, { text: "🧑‍⚕️ Для фахівців" }]);
+  assert.deepEqual(keyboard[4], [{ text: "🆘 Мені зараз погано" }], "SOS stays the bottom row, on its own");
+  assert.equal(started[started.length - 1].payload.reply_markup.is_persistent, true);
+  assert.match(lastText(started), /вікно з графіками/);
   assert.match(lastText(withApp.say("/app")), /Відкрити застосунок/);
 
   const chatOnly = harness();
   const plain = chatOnly.say("/start");
   assert.equal(plain.length, 2);
   assert.ok(plain[0].payload.reply_markup.inline_keyboard, "the chat flow keeps its inline buttons");
-  assert.deepEqual(plain[1].payload.reply_markup.keyboard, [[{ text: "⭐ Повний доступ" }], [{ text: "🆘 Мені зараз погано" }]]);
+  assert.deepEqual(plain[1].payload.reply_markup.keyboard, [[{ text: "📝 Тести" }, { text: "📈 Результати" }], [{ text: "🌿 Підтримка" }, { text: "⚙️ Налаштування" }],
+    [{ text: "⭐ Повний доступ" }, { text: "🧑‍⚕️ Для фахівців" }], [{ text: "🆘 Мені зараз погано" }]]);
   assert.match(lastText(chatOnly.say("/app")), /не налаштований/);
 });
 
@@ -3399,7 +3405,7 @@ test("access: the button under the input shows what the purchase opens, the pric
   const text = offer[0].payload.text;
   assert.match(text, /залишилося днів 7/);
   [PCL5, WELLBEING, SLEEP, STRESS].forEach((instrument) => assert.match(text, new RegExp(instrument.title)));
-  assert.match(text, /щоденна відмітка настрою/);
+  assert.match(text, /Щоденна відмітка настрою/);
   assert.match(text, /Що назавжди безкоштовно/);
   assert.match(text, /<b>100 зірок одноразово, без підписки<\/b>/);
   assert.match(text, /\/paysupport/);
@@ -3425,14 +3431,17 @@ test("access: once bought, the screen says so, and the keyboard drops the button
   assert.match(bought[0].payload.text, /Що входить/);
   assert.doesNotMatch(bought[0].payload.text, /Ціна|безкоштовно/);
   assert.equal(bought[0].payload.reply_markup, undefined, "nothing left to pay");
-  const rows = withApp.say("/start")[0].payload.reply_markup.keyboard;
-  assert.deepEqual(rows.map((row) => row[0].text), ["Відкрити застосунок", "🆘 Мені зараз погано"]);
+  const rows = menuOf(withApp.say("/start"));
+  assert.deepEqual(rows.map((row) => row.map((button) => button.text)),
+    [["Відкрити застосунок"], ["📝 Тести", "📈 Результати"], ["🌿 Підтримка", "⚙️ Налаштування"],
+      ["🧑‍⚕️ Для фахівців"], ["🆘 Мені зараз погано"]]);
   assert.match(rows[0][0].web_app.url, /[?&]plan=pro&price=100$/);
 
   const chatOnly = harness();
   chatOnly.say("/start");
   grantAccess(chatOnly.store, 777, chatOnly.clock.now);
-  assert.deepEqual(chatOnly.say("/start")[1].payload.reply_markup.keyboard, [[{ text: "🆘 Мені зараз погано" }]]);
+  assert.deepEqual(chatOnly.say("/start")[1].payload.reply_markup.keyboard, [[{ text: "📝 Тести" }, { text: "📈 Результати" }], [{ text: "🌿 Підтримка" }, { text: "⚙️ Налаштування" }],
+    [{ text: "🧑‍⚕️ Для фахівців" }], [{ text: "🆘 Мені зараз погано" }]]);
 });
 
 test("access: the button is never taken as an answer, a note, a booking request or an application", () => {
@@ -3565,6 +3574,110 @@ test("stats: /stats answers the owner only, and /admin points to it", () => {
   assert.doesNotMatch(text, /Анна|Оля/);
   assert.match(lastText(h.client.say("/stats")), /лише для власника/);
   assert.match(lastText(h.owner.say("/admin")), /Статистика бота: \/stats/);
+});
+
+// --------------------------------------------------------------- menu
+
+const SECTIONS = ["tests", "results", "support", "settings", "psy"];
+const labelsOf = (keyboard) => [].concat(...keyboard.keyboard).map((button) => button.text);
+
+test("menu: every screen ends with SOS alone, and every section leads back and on", () => {
+  const main = menuKeyboard("main", { offer: true, unlocked: true });
+  assert.deepEqual(main.keyboard[main.keyboard.length - 1], [{ text: SOS_BUTTON }]);
+  const fromMain = labelsOf(main).map(menuTarget).filter((target) => target && target.section);
+  assert.deepEqual(fromMain.map((target) => target.section).sort(), SECTIONS.slice().sort(), "each section one tap away");
+  const reached = new Set();
+  SECTIONS.forEach((id) => {
+    const rows = menuKeyboard(id, { unlocked: true, admin: true }).keyboard;
+    assert.deepEqual(rows[rows.length - 1], [{ text: SOS_BUTTON }], id + ": SOS last, alone");
+    const nav = rows[rows.length - 2];
+    assert.equal(nav[0].text, MENU_MAIN, id + ": back to the main screen");
+    const next = menuTarget(nav[1].text);
+    assert.ok(next && next.section && next.section !== id, id + ": on to another section");
+    reached.add(next.section);
+    [].concat(...rows.slice(0, -2)).forEach((button) => {
+      const target = menuTarget(button.text);
+      assert.ok(target && (target.command || target.instrument), id + ": " + button.text + " does something");
+    });
+  });
+  assert.deepEqual([...reached].sort(), SECTIONS.slice().sort(), "the next buttons go round every section");
+  assert.equal(menuTarget("Сон"), null, "typed text is never a button");
+  assert.deepEqual(menuTarget("⚙ Налаштування"), { section: "settings" }, "a dropped variation selector still matches");
+});
+
+test("menu: every button answers, none is taken for unknown input", () => {
+  const h = harness({ config: { contact: BOOKING_CONTACT } });
+  h.say("/start");
+  const tests = h.say("📝 Тести");
+  assert.match(tests[0].payload.text, /<b>📝 Тести<\/b>/);
+  h.say("📝 GAD-7");
+  assert.equal(h.sessions.get(777, h.clock.now).instrumentId, "gad7");
+  assert.match(lastText(h.say("⚙️ Налаштування")), /Нагадування і часовий пояс/);
+  assert.match(lastText(h.say(MENU_MAIN)), /Головне меню/);
+  assert.match(lastText(h.say("/menu")), /Головне меню/);
+  SECTIONS.forEach((id) => {
+    labelsOf(menuKeyboard(id, { unlocked: true, admin: true })).forEach((label) => {
+      const reply = h.say(label);
+      assert.ok(reply.length > 0, label);
+      assert.doesNotMatch(textsOf(reply).join("\n"), /Не зрозумів команду/, label);
+    });
+  });
+});
+
+test("menu: a button is never taken as a note, a booking request or an application", () => {
+  const h = harness({ config: { contact: BOOKING_CONTACT } });
+  completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
+  assert.equal(h.sessions.pendingNoteCount(), 1);
+  assert.match(lastText(h.say("📈 Результати")), /Історія всіх проходжень/);
+  assert.equal(h.store.lastResult(777, "gad7").note, undefined, "not saved as the weekly note");
+  h.say("/book");
+  h.tap("b|f|online");
+  h.tap("b|t|day");
+  h.say("🌿 Підтримка");
+  assert.equal(h.sessions.booking(777, h.clock.now).request, null, "not taken as the request");
+  h.tap("py|apply");
+  h.say("⚙️ Налаштування");
+  assert.equal(h.sessions.application(777, h.clock.now).step, "name", "not taken as the applicant's name");
+});
+
+test("menu: locks show after the trial, and the owner's items only to the owner", () => {
+  const h = harness();
+  h.say("/start");
+  h.clock.now += 20 * DAY;
+  const tests = labelsOf({ keyboard: menuOf(h.say("📝 Тести")) });
+  assert.ok(tests.includes("📝 Сон 🔒") && tests.includes("📝 GAD-7"), "free scales carry no lock");
+  assert.match(lastText(h.say("📝 Сон 🔒")), /Безкоштовний період закінчився/);
+  assert.ok(!labelsOf({ keyboard: menuOf(h.say("🧑‍⚕️ Для фахівців")) }).includes("📊 Статистика бота"));
+  const owned = psyHarness();
+  owned.owner.say("/start");
+  const rows = labelsOf({ keyboard: menuOf(owned.owner.say("🧑‍⚕️ Для фахівців")) });
+  assert.ok(rows.includes("📊 Статистика бота") && rows.includes("📋 Заявки фахівців"));
+});
+
+test("menu and commands: every label, description and offer line starts with a capital", () => {
+  const options = { offer: true, unlocked: true, admin: true, webappUrl: "https://example.pages.dev/" };
+  ["main"].concat(SECTIONS).forEach((id) => {
+    labelsOf(menuKeyboard(id, options)).forEach((label) => assert.match(label, /^\P{L}*\p{Lu}/u, label));
+  });
+  COMMANDS.forEach((entry) => assert.match(entry.description, /^\P{L}*\p{Lu}/u, entry.command));
+  unlockedLines().concat(freeLines()).forEach((line) => assert.match(line, /^\p{Lu}/u, line));
+});
+
+test("help: the commands come grouped in menu order, each once, each answered", () => {
+  const h = harness();
+  h.say("/start");
+  const text = lastText(h.say("/help"));
+  let previous = -1;
+  COMMAND_GROUPS.forEach((group) => {
+    const at = text.indexOf("<b>" + group.title + "</b>");
+    assert.ok(at > previous, group.title);
+    previous = at;
+  });
+  assert.equal(new Set(COMMANDS.map((entry) => entry.command)).size, COMMANDS.length, "no command twice");
+  COMMANDS.forEach((entry) => {
+    assert.ok(text.includes("/" + entry.command + " "), entry.command);
+    assert.doesNotMatch(textsOf(h.say("/" + entry.command)).join("\n"), /Не зрозумів команду/, entry.command);
+  });
 });
 
 // --------------------------------------------------------------- runner

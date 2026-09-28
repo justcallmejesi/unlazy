@@ -10,22 +10,22 @@ import { FREE_INSTRUMENT_LIST, PAID_INSTRUMENT_LIST } from "./instruments.mjs";
 
 export const OFFER_TITLE = "Повний доступ";
 
-// Each line reads after a bullet.
+// Each line is a list item of its own, so each starts with a capital.
 export function unlockedLines() {
   return PAID_INSTRUMENT_LIST.map((instrument) => instrument.title + ": " + instrument.subtitle).concat([
-    "щоденна відмітка настрою з графіком",
-    "історія всіх проходжень і статистика з графіками",
-    "щотижневе нагадування і його налаштування",
+    "Щоденна відмітка настрою з графіком",
+    "Історія всіх проходжень і статистика з графіками",
+    "Щотижневе нагадування і його налаштування",
   ]);
 }
 
 export function freeLines() {
   return FREE_INSTRUMENT_LIST.map((instrument) => instrument.title + ": " + instrument.subtitle +
     ", сам тест і результат").concat([
-    "блок підтримки, якщо в PHQ-9 позначено ризик",
-    "техніки самодопомоги і кнопка «Мені зараз погано»",
-    "звіт для фахівця і запис на консультацію",
-    "вивантаження і видалення даних: Ваші дані завжди Ваші",
+    "Кнопка «Мені зараз погано» і техніки самодопомоги",
+    "Блок підтримки, якщо в PHQ-9 позначено ризик",
+    "Звіт для фахівця і запис на консультацію",
+    "Вивантаження і видалення даних: Ваші дані завжди Ваші",
   ]);
 }
 

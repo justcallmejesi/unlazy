@@ -56,9 +56,13 @@ Paid: the sleep, stress, PCL-5 and wellbeing scales, the daily mood check-in
 (`/mood`), history (`/results`, `/last`), statistics, the weekly reminder and
 its settings (`/remind`, `/tz`).
 
-The offer lives behind "⭐ Повний доступ": a reply-keyboard row for anyone who
-has not bought (never in the SOS row, gone after purchase), a Mini App card,
-and `/buy`. It is a one-time purchase, so it is never labelled a subscription.
+The reply keyboard is the bot's menu: a main screen and five sections, every
+function a button, each section leading back and on to the next, and "Мені
+зараз погано" alone on the last row of every screen. Labels start with an emoji,
+so typed text never matches one. The offer lives behind "⭐ Повний доступ": a
+main-screen button for anyone who has not bought (gone after purchase), a Mini
+App card, and `/buy`. It is a one-time purchase, so it is never labelled a
+subscription.
 
 Specialist mode is a separate monthly Stars subscription, `PSY_PRICE_STARS` 300,
 sold through `createInvoiceLink` with `subscription_period`. Who pays: a client

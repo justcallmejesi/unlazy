@@ -320,9 +320,9 @@ function renderHome() {
 // ----------------------------------------------------------------- access
 
 function accessHint() {
-  if (PLAN === "pro") return "відкрито назавжди";
-  if (PLAN === "trial") return "безкоштовний період, залишилося днів " + DAYS_LEFT;
-  return PRICE ? priceLine(PRICE) : "що входить і оплата";
+  if (PLAN === "pro") return "Куплено, усе відкрито";
+  if (PLAN === "trial") return "Безкоштовний період, залишилося днів " + DAYS_LEFT;
+  return PRICE ? priceLine(PRICE) : "Що входить і оплата";
 }
 
 function fillList(list, lines) {

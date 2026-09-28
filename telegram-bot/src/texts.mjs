@@ -51,36 +51,57 @@ export const DISCLAIMER =
   "Опитувальники GAD-7 і PHQ-9 це інструменти самоспостереження, а не діагноз. " +
   "Підсумковий бал не замінює консультацію лікаря або психотерапевта.";
 
-export const COMMANDS = [
-  { command: "app", description: "Відкрити застосунок у вікні" },
-  { command: "gad7", description: "Пройти GAD-7 (тривога, 7 питань)" },
-  { command: "phq9", description: "Пройти PHQ-9 (настрій, 9 питань)" },
-  { command: "sleep", description: "Щоденник сну (7 питань)" },
-  { command: "stress", description: "Рівень напруження (8 питань)" },
-  { command: "pcl5", description: "PCL-5: посттравматичний стрес (20 питань)" },
-  { command: "wellbeing", description: "Самопочуття: ресурс і опора (6 питань)" },
-  { command: "mood", description: "Відмітити настрій сьогодні (повний доступ)" },
-  { command: "selfhelp", description: "Техніки самодопомоги" },
-  { command: "sos", description: "Мені зараз погано" },
-  { command: "report", description: "Звіт для фахівця" },
-  { command: "book", description: "Записатися на консультацію" },
-  { command: "privacy", description: "Мої згоди на передачу даних фахівцю" },
-  { command: "psy", description: "Кабінет фахівця: для психологів" },
-  { command: "clients", description: "Мої клієнти (кабінет фахівця)" },
-  { command: "invite", description: "Посилання для клієнтів (кабінет фахівця)" },
-  { command: "results", description: "Історія результатів (повний доступ)" },
-  { command: "last", description: "Останні результати (повний доступ)" },
-  { command: "remind", description: "Нагадування (повний доступ)" },
-  { command: "tz", description: "Часовий пояс: auto або, наприклад, /tz +3" },
-  { command: "export", description: "Вивантажити мої дані у JSON" },
-  { command: "delete", description: "Видалити всі мої дані" },
-  { command: "cancel", description: "Перервати поточний опитувальник" },
-  { command: "buy", description: "Повний доступ: що входить і оплата" },
-  { command: "contact", description: "Звернутися за допомогою" },
-  { command: "paysupport", description: "Питання щодо оплати і повернення" },
-  { command: "about", description: "Про тести і про те, що зберігає бот" },
-  { command: "help", description: "Список команд" },
+// The command list Telegram shows behind the menu button, in the order of the
+// menu sections below, and /help with the same headings.
+export const COMMAND_GROUPS = [
+  { title: "Головне", commands: [
+    { command: "menu", description: "Головне меню з розділами" },
+    { command: "sos", description: "Мені зараз погано" },
+  ] },
+  { title: "Тести", commands: [
+    { command: "gad7", description: "Пройти GAD-7 (тривога, 7 питань)" },
+    { command: "phq9", description: "Пройти PHQ-9 (настрій, 9 питань)" },
+    { command: "sleep", description: "Щоденник сну (7 питань)" },
+    { command: "stress", description: "Рівень напруження (8 питань)" },
+    { command: "pcl5", description: "PCL-5: посттравматичний стрес (20 питань)" },
+    { command: "wellbeing", description: "Самопочуття: ресурс і опора (6 питань)" },
+    { command: "mood", description: "Відмітити настрій сьогодні (повний доступ)" },
+  ] },
+  { title: "Результати", commands: [
+    { command: "results", description: "Історія результатів (повний доступ)" },
+    { command: "last", description: "Останні результати (повний доступ)" },
+    { command: "report", description: "Звіт для фахівця" },
+  ] },
+  { title: "Підтримка", commands: [
+    { command: "selfhelp", description: "Техніки самодопомоги" },
+    { command: "book", description: "Записатися на консультацію" },
+    { command: "contact", description: "Звернутися по допомогу" },
+  ] },
+  { title: "Повний доступ", commands: [
+    { command: "buy", description: "Повний доступ: що входить і оплата" },
+    { command: "paysupport", description: "Питання щодо оплати і повернення" },
+  ] },
+  { title: "Налаштування", commands: [
+    { command: "remind", description: "Нагадування (повний доступ)" },
+    { command: "tz", description: "Часовий пояс: auto або, наприклад, /tz +3" },
+    { command: "privacy", description: "Мої згоди на передачу даних фахівцю" },
+    { command: "export", description: "Вивантажити мої дані у JSON" },
+    { command: "delete", description: "Видалити всі мої дані" },
+    { command: "about", description: "Про тести і про те, що зберігає бот" },
+  ] },
+  { title: "Для фахівців", commands: [
+    { command: "psy", description: "Кабінет фахівця: для психологів" },
+    { command: "clients", description: "Мої клієнти (кабінет фахівця)" },
+    { command: "invite", description: "Посилання для клієнтів (кабінет фахівця)" },
+  ] },
+  { title: "Інше", commands: [
+    { command: "app", description: "Відкрити застосунок у вікні" },
+    { command: "cancel", description: "Перервати поточний опитувальник" },
+    { command: "help", description: "Список команд" },
+  ] },
 ];
+
+export const COMMANDS = COMMAND_GROUPS.reduce((all, group) => all.concat(group.commands), []);
 
 export function crisisBlock(crisisContact) {
   return [
@@ -127,8 +148,9 @@ function questionWord(count) {
 }
 
 export function helpText() {
-  const lines = COMMANDS.map((entry) => "/" + entry.command + " " + entry.description);
-  return ["<b>Команди</b>", ""].concat(lines).join("\n");
+  const blocks = COMMAND_GROUPS.map((group) => ["<b>" + escapeHtml(group.title) + "</b>"]
+    .concat(group.commands.map((entry) => "/" + entry.command + " " + escapeHtml(entry.description))).join("\n"));
+  return ["<b>Команди</b>", "Ті самі розділи є кнопками під полем введення: /menu"].concat(blocks).join("\n\n");
 }
 
 export function aboutText(reminderLine) {
@@ -382,24 +404,146 @@ export function answerKeyboard(instrument, session) {
   };
 }
 
-// The one full-width button under the input field. A keyboard button is the
-// only launch type whose Mini App can send data back without a server, so this
-// is what the app is opened from.
-//
-// The row under it is "Мені зараз погано", kept in reach at all times: it
-// arrives as a plain message, which the router answers before anything else.
-//
-// Between them, for anyone who has not bought, "⭐ Повний доступ". Never in
-// the same row as "Мені зараз погано", and gone once access is bought.
-export function appKeyboard(webappUrl, offer = true) {
-  const rows = webappUrl ? [[{ text: "Відкрити застосунок", web_app: { url: webappUrl } }]] : [];
-  if (offer) rows.push([{ text: ACCESS_BUTTON }]);
+// ----------------------------------------------------------------- menu
+
+// The reply keyboard under the input field is the bot's menu: a main screen
+// and five sections, every function a button. Each section leads back to the
+// main screen and on to the next section. "Мені зараз погано" closes every
+// screen on a row of its own. Every label starts with an emoji, so a typed
+// note or request can never be taken for a button.
+export const MENU_MAIN = "⬅️ Головне меню";
+
+const MENU_SECTIONS = [
+  {
+    id: "tests",
+    button: "📝 Тести",
+    items: INSTRUMENT_LIST.map((instrument) => ({
+      label: "📝 " + instrument.title, instrument: instrument.id, paid: Boolean(instrument.paid),
+    })).concat([{ label: "🙂 Настрій сьогодні", command: "mood", paid: true }]),
+  },
+  {
+    id: "results",
+    button: "📈 Результати",
+    items: [
+      { label: "📊 Історія результатів", command: "results", paid: true },
+      { label: "🕘 Останні результати", command: "last", paid: true },
+      { label: "📄 Звіт для фахівця", command: "report" },
+    ],
+  },
+  {
+    id: "support",
+    button: "🌿 Підтримка",
+    items: [
+      { label: "🧘 Техніки самодопомоги", command: "selfhelp" },
+      { label: "🗓 Записатися на консультацію", command: "book" },
+      { label: "💬 Звернутися по допомогу", command: "contact" },
+    ],
+  },
+  {
+    id: "settings",
+    button: "⚙️ Налаштування",
+    items: [
+      { label: "⏰ Нагадування", command: "remind", paid: true },
+      { label: "🌍 Часовий пояс", command: "tz", paid: true },
+      { label: "🔐 Мої згоди", command: "privacy" },
+      { label: "📦 Вивантажити мої дані", command: "export" },
+      { label: "💳 Оплата і повернення", command: "paysupport" },
+      { label: "📖 Про бота", command: "about" },
+      { label: "🗑 Видалити мої дані", command: "delete" },
+    ],
+  },
+  {
+    id: "psy",
+    button: "🧑‍⚕️ Для фахівців",
+    items: [
+      { label: "🩺 Кабінет фахівця", command: "psy" },
+      { label: "👥 Мої клієнти", command: "clients" },
+      { label: "🔗 Посилання для клієнтів", command: "invite" },
+      { label: "📊 Статистика бота", command: "stats", admin: true },
+      { label: "📋 Заявки фахівців", command: "admin", admin: true },
+    ],
+  },
+];
+
+const MENU_INTROS = {
+  results: "Історія всіх проходжень, останні бали з нотатками і звіт для фахівця одним файлом.",
+  support: "Короткі вправи на зараз, запис на консультацію і зв'язок із фахівцем.",
+  settings: "Нагадування і часовий пояс, згоди на передачу даних, Ваші дані, оплата і повернення.",
+  psy: "Кабінет психолога: клієнти зі згодою, їхня динаміка між зустрічами і сповіщення про ризик. " +
+    "Окрема щомісячна підписка, заявку розглядає власник бота.",
+};
+
+function menuSection(id) {
+  return MENU_SECTIONS.find((section) => section.id === id) || null;
+}
+
+// Clients drop the emoji variation selector now and then, and a locked item
+// carries 🔒 at the end, so neither decides whether a label matches.
+function menuKey(text) {
+  return typeof text === "string" ? text.replace(/\uFE0F/g, "").replace(/\s*🔒$/u, "").trim() : "";
+}
+
+const MENU_TARGETS = new Map([[menuKey(MENU_MAIN), { section: "main" }]]);
+MENU_SECTIONS.forEach((section) => {
+  MENU_TARGETS.set(menuKey(section.button), { section: section.id });
+  section.items.forEach((item) => {
+    MENU_TARGETS.set(menuKey(item.label), item.instrument ? { instrument: item.instrument } : { command: item.command });
+  });
+});
+
+// What a tapped menu button asks for: { section }, { instrument } or
+// { command }, or null for any other text.
+export function menuTarget(text) {
+  return MENU_TARGETS.get(menuKey(text)) || null;
+}
+
+// `options`: webappUrl (main screen only), offer (not bought yet), unlocked
+// (access active, else paid items carry 🔒) and admin (the owner's items).
+export function menuKeyboard(sectionId, options = {}) {
+  const rows = [];
+  const section = menuSection(sectionId);
+  if (!section) {
+    if (options.webappUrl) rows.push([{ text: "Відкрити застосунок", web_app: { url: options.webappUrl } }]);
+    const button = (id) => ({ text: menuSection(id).button });
+    rows.push([button("tests"), button("results")], [button("support"), button("settings")]);
+    rows.push(options.offer ? [{ text: ACCESS_BUTTON }, button("psy")] : [button("psy")]);
+  } else {
+    const items = section.items.filter((item) => !item.admin || options.admin)
+      .map((item) => ({ text: item.paid && options.unlocked === false ? item.label + " 🔒" : item.label }));
+    for (let index = 0; index < items.length; index += 2) rows.push(items.slice(index, index + 2));
+    const next = MENU_SECTIONS[(MENU_SECTIONS.indexOf(section) + 1) % MENU_SECTIONS.length];
+    rows.push([{ text: MENU_MAIN }, { text: next.button }]);
+  }
   rows.push([{ text: SOS_BUTTON }]);
   return { keyboard: rows, resize_keyboard: true, is_persistent: true };
 }
 
-export function sosHint() {
-  return "Якщо колись стане зовсім важко, кнопка «" + escapeHtml(SOS_BUTTON) + "» під полем введення завжди поруч.";
+// The message that brings a screen's keyboard up.
+export function menuText(sectionId, options = {}) {
+  const section = menuSection(sectionId);
+  if (!section) {
+    return [
+      "<b>Головне меню</b>",
+      "Оберіть розділ кнопками під полем введення.",
+      options.webappUrl ? "Кнопка «Відкрити застосунок» відкриває вікно з графіками." : null,
+      "Якщо стане зовсім важко, кнопка «" + escapeHtml(SOS_BUTTON) + "» завжди внизу.",
+    ].filter(Boolean).join("\n");
+  }
+  const lines = ["<b>" + escapeHtml(section.button) + "</b>"];
+  if (section.id === "tests") {
+    lines.push("Оберіть тест кнопкою нижче.");
+    const locked = (paid) => (paid && options.unlocked === false ? " 🔒" : "");
+    INSTRUMENT_LIST.forEach((instrument) => {
+      lines.push("<b>" + escapeHtml(instrument.title) + "</b>: " + escapeHtml(instrument.subtitle) + ", " +
+        instrument.items.length + " " + questionWord(instrument.items.length) + locked(instrument.paid));
+    });
+    lines.push("<b>Настрій сьогодні</b>: одна відмітка від 1 до 10" + locked(true));
+    if (options.unlocked === false) lines.push("", "🔒 Входить у повний доступ: «" + escapeHtml(ACCESS_BUTTON) + "» у головному меню.");
+  } else {
+    lines.push(escapeHtml(MENU_INTROS[section.id]));
+  }
+  if (section.id === "support") lines.push("Якщо зараз дуже важко, натисніть «" + escapeHtml(SOS_BUTTON) + "».");
+  return lines.join("\n");
 }
 
 export function appIntro() {
@@ -760,7 +904,7 @@ export function historyMessages(store, chatId, schedule, limit = 10) {
   const sections = INSTRUMENT_LIST.map((instrument) => {
     const entries = store.history(chatId, instrument.id, limit);
     if (!entries.length) {
-      return "<b>" + escapeHtml(instrument.title) + "</b>\nще немає проходжень: " + instrument.command;
+      return "<b>" + escapeHtml(instrument.title) + "</b>\nЩе немає проходжень: " + instrument.command;
     }
     const rows = entries.map((entry) => {
       const stamp = stampIn(schedule, Date.parse(entry.completedAt));
