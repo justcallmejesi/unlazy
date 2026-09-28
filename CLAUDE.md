@@ -105,3 +105,22 @@ Chart colours are per scale: anxiety red, depression dark blue, sleep light
 blue, stress burgundy, PCL-5 green, wellbeing violet, mood amber. Light mode clears every check in the dataviz validator;
 dark mode has one pair below the separation floor, which is why every chart
 carries its name plus a swatch and no plot ever holds two scales.
+
+## Helper LLM (paused)
+
+The owner wants `justcallmejesi/freellmapi` used as a helper worker for bounded
+tasks, with every result checked before use. Paused on 2026-09-28 at the
+owner's request; resume only when asked. Found so far:
+
+- This environment's egress proxy blocks the provider hosts (Groq, OpenRouter,
+  Cerebras, Mistral, keyless Kilo, OVH, AI Horde, LLM7). Only
+  `generativelanguage.googleapis.com` (Gemini) answered. The owner has to widen
+  Network access or allow those hosts, and add at least one free key as an
+  environment variable (`GEMINI_API_KEY`, optionally `GROQ_API_KEY`,
+  `OPENROUTER_API_KEY`), never pasted into chat.
+- `npm ci` in the clone works. The server runs from `server/`
+  (`npm run dev -w server`, port 3001), takes keys headless through
+  `FREEAPI_CONFIG_JSON`, and follows `HTTPS_PROXY`. Still open: getting the
+  unified `/v1` key without the dashboard.
+- Never send client or health data, tokens, keys or personal data to it: free
+  providers may log prompts, Kilo says it trains on them.
