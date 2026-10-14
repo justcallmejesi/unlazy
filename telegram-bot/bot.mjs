@@ -320,10 +320,16 @@ async function main() {
   }
   if (config.webappUrl) {
     // The button beside the input field opens the same page. It cannot send
-    // data back, so the keyboard button remains the one that submits.
+    // data back, so a window opened from it answers through t.me/<bot>?start=
+    // links, which is why it carries the bot's name. The main screen replaces
+    // it per chat with the full hints.
+    const separator = config.webappUrl.indexOf("?") === -1 ? "?" : "&";
+    const menuUrl = config.botUsername
+      ? config.webappUrl + separator + "b=" + encodeURIComponent(config.botUsername)
+      : config.webappUrl;
     try {
       await client.call("setChatMenuButton", {
-        menu_button: { type: "web_app", text: "Застосунок", web_app: { url: config.webappUrl } },
+        menu_button: { type: "web_app", text: "Застосунок", web_app: { url: menuUrl } },
       });
       log("Mini App enabled: " + config.webappUrl);
     } catch (error) {

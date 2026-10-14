@@ -15,7 +15,7 @@ import {
   BOOKING_FORMATS, BOOKING_TIMES, MOOD_MAX, MOOD_MIN, MOOD_TAGS, PRACTICE_IDS, PRACTICES, SOS_EMERGENCY,
   SOS_INTRO, SOS_STEPS, SOS_TITLE, practicesFor,
 } from "./selfhelp.mjs";
-import { OFFER_TITLE, freeLines, offerStatus, payLabel, priceLine, unlockedLines } from "./offer.mjs";
+import { OFFER_TITLE, freeLines, offerStatus, payLabel, priceLine, starWord, unlockedLines } from "./offer.mjs";
 
 // One hue per scale. On a light surface the four clear every check; on the
 // dark surface the navy and the light blue sit closer than the separation
@@ -47,6 +47,13 @@ const PRICE = /^[1-9][0-9]{0,4}$/.test(PARAMS.get("price") || "") ? Number(PARAM
 const CONTACT = /^[A-Za-z0-9_]{4,32}$/.test(PARAMS.get("c") || "")
   ? { username: PARAMS.get("c"), name: (PARAMS.get("cn") || "").slice(0, 64) }
   : null;
+// The bot itself, for start links when sendData is not available.
+const BOT = /^[A-Za-z0-9_]{4,32}$/.test(PARAMS.get("b") || "") ? PARAMS.get("b") : null;
+// Where the specialist cabinet stands, and its monthly price. A hint for the
+// "Для фахівців" screen only; every command checks again in the chat.
+const PSY_KINDS = ["none", "pending", "rejected", "admin", "subscribed", "expired", "unsubscribed"];
+const PSY = PSY_KINDS.indexOf(PARAMS.get("psy")) === -1 ? null : PARAMS.get("psy");
+const PSY_PRICE = /^[1-9][0-9]{0,4}$/.test(PARAMS.get("pp") || "") ? Number(PARAMS.get("pp")) : null;
 
 // ----------------------------------------------------------------- platform
 
@@ -70,13 +77,48 @@ function haptic(kind) {
   } catch (error) { /* older clients */ }
 }
 
+// Only a window opened from the keyboard button under the input field can
+// call sendData; from the menu button or a link Telegram drops it without a
+// word. Such a launch is the one that carries initData.
+const CAN_SEND_DATA = Boolean(tg && typeof tg.sendData === "function" && !tg.initData);
+
+// The same payload squeezed into a start link, decoded by parseStartCode in
+// the bot. A weekly note and a booking request do not fit and stay behind.
+function startCode(payload) {
+  if (payload.type === "buy") return "buy";
+  if (payload.type === "delete") return "del";
+  if (payload.type === "book") return "book";
+  if (payload.type === "report") return payload.notes ? "rep1" : "rep0";
+  if (payload.type === "result") return "r_" + payload.instrument + "_" + payload.answers.join("");
+  if (payload.type === "mood") return "m_" + payload.rating + (payload.tags.length ? "_" + payload.tags.join("-") : "");
+  if (payload.type === "reminders") {
+    const zone = payload.tz === "auto" ? "a" : (payload.tz < 0 ? "n" + -payload.tz : String(payload.tz));
+    return "t_" + (payload.enabled ? 1 : 0) + "_" + payload.time.replace(":", "") + "_" + zone;
+  }
+  return null;
+}
+
+// Opens the chat with "/start <code>", then closes the window.
+function openBot(code) {
+  if (!BOT || !code) return false;
+  const url = "https://t.me/" + BOT + "?start=" + code;
+  if (tg && typeof tg.openTelegramLink === "function") {
+    tg.openTelegramLink(url);
+    try { tg.close(); } catch (error) { /* older clients */ }
+  } else {
+    window.open(url, "_blank", "noopener");
+  }
+  return true;
+}
+
 // sendData closes the Mini App, so every call to it is a terminal action.
 function submit(payload) {
   const body = JSON.stringify(Object.assign({ v: PAYLOAD_VERSION }, payload));
-  if (tg && typeof tg.sendData === "function") {
+  if (CAN_SEND_DATA) {
     tg.sendData(body);
     return true;
   }
+  if (openBot(startCode(payload))) return true;
   // Opened outside Telegram, or from a launch type that cannot send data.
   window.alert("Це вікно відкрите не з кнопки в чаті, тому дані не можуть піти боту.\n\n" + body);
   return false;
@@ -317,6 +359,7 @@ function renderHome() {
   // Alone in its section, the practices tile spans the row instead of half of it.
   $("practices-card").classList.toggle("wide", !CONTACT);
   $("access-hint").textContent = accessHint();
+  $("psy-hint").textContent = psyHint();
 }
 
 // ----------------------------------------------------------------- access
@@ -367,6 +410,96 @@ function renderAccess(reason) {
 function openAccess(reason) {
   renderAccess(reason);
   show("access");
+}
+
+// ----------------------------------------------------------------- specialist
+
+// The cabinet lives in the chat: the client list, cards and reports are on the
+// bot's server, which this static page cannot read. So the screen explains it
+// and each tile opens the matching command there.
+const PSY_STATUS = {
+  pending: "Заявку отримано, її розглядає власник бота. Відповідь прийде в чат.",
+  rejected: "Заявку не схвалено. Деталі в чаті.",
+  expired: "Підписка на кабінет закінчилася. Клієнти і їхні згоди збережені, доступ повернеться після оплати.",
+  unsubscribed: "Заявку схвалено. Залишилося оформити підписку, і кабінет відкриється.",
+  admin: "Ви власник бота: кабінет працює без оплати.",
+};
+
+const PSY_TILES = {
+  cabinet: { emoji: "🗂", title: "Мій кабінет", hint: "Статус, підписка, посилання", cmd: "psy" },
+  clients: { emoji: "👥", title: "Мої клієнти", hint: "Бали, динаміка, картки", cmd: "clients" },
+  invite: { emoji: "🔗", title: "Запросити клієнта", hint: "Посилання на згоду", cmd: "invite" },
+  apply: { emoji: "📝", title: "Подати заявку", hint: "Ім'я, освіта, умови", cmd: "psy", wide: true },
+  status: { emoji: "⏳", title: "Статус заявки", hint: "Відкрити в чаті", cmd: "psy", wide: true },
+  subscribe: { emoji: "⭐", title: "Оформити підписку", hint: "", cmd: "psy", wide: true },
+  requests: { emoji: "✅", title: "Заявки фахівців", hint: "Схвалити або відхилити", cmd: "admin" },
+  stats: { emoji: "📈", title: "Статистика бота", hint: "Лише кількості", cmd: "stats" },
+};
+
+function psyTileIds() {
+  if (PSY === "admin") return ["clients", "invite", "requests", "stats", "cabinet"];
+  if (PSY === "subscribed") return ["clients", "invite", "cabinet"];
+  if (PSY === "pending" || PSY === "rejected") return ["status"];
+  if (PSY === "expired" || PSY === "unsubscribed") return ["subscribe", "cabinet"];
+  if (PSY === "none") return ["apply"];
+  // An older launch URL says nothing: the chat decides what to show.
+  return ["cabinet"];
+}
+
+function psyHint() {
+  if (PSY === "admin" || PSY === "subscribed") return "Клієнти, картки, звіти, запрошення";
+  if (PSY === "pending") return "Заявка на розгляді";
+  if (PSY === "expired") return "Підписка закінчилася";
+  if (PSY === "unsubscribed") return "Схвалено, залишилося оформити підписку";
+  return "Клієнти, їхня динаміка і звіти за згодою";
+}
+
+function renderPsy() {
+  const status = $("psy-status");
+  status.hidden = !PSY_STATUS[PSY];
+  status.textContent = PSY_STATUS[PSY] || "";
+  const menu = $("psy-menu");
+  menu.textContent = "";
+  const ids = psyTileIds();
+  ids.forEach((id, index) => {
+    const tile = PSY_TILES[id];
+    const button = document.createElement("button");
+    button.type = "button";
+    // An odd last tile spans the row rather than leaving a hole.
+    const wide = tile.wide || (index === ids.length - 1 && ids.length % 2 === 1);
+    button.className = "menu-item" + (wide ? " wide" : "");
+    const emoji = document.createElement("span");
+    emoji.className = "emoji";
+    emoji.setAttribute("aria-hidden", "true");
+    emoji.textContent = tile.emoji;
+    const body = document.createElement("span");
+    body.className = "body";
+    const title = document.createElement("span");
+    title.className = "title";
+    title.textContent = tile.title;
+    const hint = document.createElement("span");
+    hint.className = "hint";
+    hint.textContent = id === "subscribe" && PSY_PRICE ? PSY_PRICE + " " + starWord(PSY_PRICE) + " на місяць" : tile.hint;
+    body.appendChild(title);
+    body.appendChild(hint);
+    const chev = document.createElement("span");
+    chev.className = "chev";
+    chev.textContent = "›";
+    button.appendChild(emoji);
+    button.appendChild(body);
+    button.appendChild(chev);
+    button.addEventListener("click", () => {
+      haptic("light");
+      if (!openBot(tile.cmd)) window.alert("Відкрийте в чаті команду /" + tile.cmd + ".");
+    });
+    menu.appendChild(button);
+  });
+  $("psy-about").hidden = PSY === "admin" || PSY === "subscribed";
+  if (PSY_PRICE) {
+    $("psy-price").textContent = "Кожного фахівця перевіряє власник бота. Після схвалення кабінет коштує " +
+      PSY_PRICE + " " + starWord(PSY_PRICE) + " на місяць: підписка в зірках Telegram, продовжується автоматично, " +
+      "скасовується будь-коли.";
+  }
 }
 
 // ----------------------------------------------------------------- self-help
@@ -1011,6 +1144,7 @@ Array.prototype.forEach.call(document.querySelectorAll("[data-go]"), (node) => {
     if (target === "practices") renderPractices();
     if (target === "booking") renderBooking();
     if (target === "access") renderAccess("");
+    if (target === "psy") renderPsy();
     if (target === "mood") {
       renderMood();
       if (!state.unlocked) return;

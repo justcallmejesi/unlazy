@@ -48,7 +48,7 @@ import {
   psyInvoiceMessage, psyNeedsAccess, psyNewInvite, psyPending, psyRejected, psyRenewed, psyResumed,
   psySubscribeKeyboard, psyTerms, psyTermsKeyboard, revokeKeyboard, revoked,
 } from "./psytexts.mjs";
-import { parseWebAppPayload } from "./webapp.mjs";
+import { parseStartCode, parseWebAppPayload } from "./webapp.mjs";
 
 const HTML = { parse_mode: "HTML" };
 // Commands that start a questionnaire, mapped to their instrument.
@@ -127,7 +127,7 @@ export function createRouter(context) {
   // The window has no configuration of its own, so what it may show travels
   // in the launch URL: whether full access is on (a hint only, the bot checks
   // again), and the public contact for the "Мені зараз погано" screen.
-  function appUrl(state) {
+  function appUrl(state, chatId) {
     if (!config.webappUrl) return null;
     const separator = config.webappUrl.indexOf("?") === -1 ? "?" : "&";
     let url = config.webappUrl + separator + "pro=" + (state.active ? "1" : "0") + "&plan=" + state.kind;
@@ -138,6 +138,11 @@ export function createRouter(context) {
       url += "&c=" + encodeURIComponent(contact.username);
       if (contact.name) url += "&cn=" + encodeURIComponent(contact.name);
     }
+    // The bot's name lets a window opened from the menu button reach the chat
+    // through a start link, and the specialist screen shows where the cabinet
+    // stands. Hints again: every command checks for itself.
+    if (config.botUsername) url += "&b=" + encodeURIComponent(config.botUsername);
+    if (chatId !== undefined) url += "&psy=" + stateOf(chatId).kind + "&pp=" + Number(config.psy.stars);
     return url;
   }
 
@@ -546,7 +551,7 @@ export function createRouter(context) {
   // to anyone who has not bought; a section marks what is locked.
   function menuOptions(chatId) {
     const state = access(chatId);
-    return { webappUrl: appUrl(state), offer: state.kind !== "pro", unlocked: state.active, admin: isAdmin(chatId) };
+    return { webappUrl: appUrl(state, chatId), offer: state.kind !== "pro", unlocked: state.active, admin: isAdmin(chatId) };
   }
 
   function mainKeyboard(chatId) {
@@ -556,7 +561,20 @@ export function createRouter(context) {
   function menuActions(chatId, sectionId) {
     startTrialFor(chatId);
     const options = menuOptions(chatId);
-    return [send(chatId, menuText(sectionId, options), { reply_markup: menuKeyboard(sectionId, options) })];
+    const actions = [send(chatId, menuText(sectionId, options), { reply_markup: menuKeyboard(sectionId, options) })];
+    // The menu button beside the input field is set once for every chat with
+    // the bare address, so a window opened from it would not know what is
+    // unlocked. The main screen refreshes this chat's own button with the
+    // same hints the keyboard button carries.
+    if (sectionId === "main" && options.webappUrl) actions.unshift(menuButtonAction(chatId, options.webappUrl));
+    return actions;
+  }
+
+  function menuButtonAction(chatId, url) {
+    return {
+      method: "setChatMenuButton",
+      payload: { chat_id: chatId, menu_button: { type: "web_app", text: "Застосунок", web_app: { url } } },
+    };
   }
 
   // A tapped menu button: a screen, a questionnaire, or what its command does.
@@ -701,6 +719,10 @@ export function createRouter(context) {
     }
     switch (command) {
       case "start": {
+        // What a window opened from the menu button sends instead of sendData.
+        const fromApp = args ? parseStartCode(args) : null;
+        if (fromApp && fromApp.command) return handleCommand(chatId, { command: fromApp.command, args: "" }, message);
+        if (fromApp && fromApp.data) return handleWebAppData(chatId, fromApp.data).actions;
         if (args.indexOf(INVITE_PREFIX) === 0) {
           if (!store.user(chatId).firstSeenAt) store.updateUser(chatId, { firstSeenAt: new Date(now()).toISOString() });
           startTrialFor(chatId);
@@ -968,7 +990,9 @@ export function createRouter(context) {
     const record = applyPayment(store, chatId, payment, now());
     if (!record) return [send(chatId, "Платіж отримано, але я не зміг його прочитати. Напишіть у /paysupport.")];
     if (record.duplicateChargeId) return [send(chatId, duplicatePurchase(record.duplicateChargeId))];
-    return [send(chatId, purchaseThanks(config.price), { reply_markup: mainKeyboard(chatId) })];
+    const thanks = [send(chatId, purchaseThanks(config.price), { reply_markup: mainKeyboard(chatId) })];
+    const url = appUrl(access(chatId), chatId);
+    return url ? [menuButtonAction(chatId, url)].concat(thanks) : thanks;
   }
 
   function handleMessage(message) {

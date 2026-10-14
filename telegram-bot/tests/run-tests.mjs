@@ -40,7 +40,7 @@ import { createRouter, parseAnswerCallback, parseCommand } from "../src/router.m
 import { TelegramClient, TelegramError, clipText, encodeBody, escapeHtml } from "../src/telegram.mjs";
 import { DEFAULT_CRISIS_CONTACT, loadConfig, parseEnvFile } from "../src/config.mjs";
 import { BotRuntime, buildBot } from "../bot.mjs";
-import { MAX_PAYLOAD_BYTES, parseWebAppPayload } from "../src/webapp.mjs";
+import { MAX_PAYLOAD_BYTES, parseStartCode, parseWebAppPayload } from "../src/webapp.mjs";
 import { SHARED, isCurrent, staleCopies } from "../webapp/build.mjs";
 import {
   ACCESS_BUTTON, COMMANDS, COMMAND_GROUPS, MENU_MAIN, MESSAGE_LIMIT, accessOffer, historyMessages, isAccessText,
@@ -737,7 +737,7 @@ test("webapp: a mood from the app is stored, a report is sent, a booking becomes
 test("webapp: the launch URL carries the public contact for the SOS screen", () => {
   const h = harness({ config: { webappUrl: "https://example.pages.dev/", contact: BOOKING_CONTACT } });
   const url = menuOf(h.say("/start"))[0][0].web_app.url;
-  assert.equal(url, "https://example.pages.dev/?pro=1&plan=trial&days=7&price=100&c=helper_psy&cn=" + encodeURIComponent("Олексій"));
+  assert.equal(url, "https://example.pages.dev/?pro=1&plan=trial&days=7&price=100&c=helper_psy&cn=" + encodeURIComponent("Олексій") + "&b=test_bot&psy=none&pp=177");
 });
 
 // --------------------------------------------------------------- specialist mode
@@ -2287,14 +2287,38 @@ test("paywall: a second charge that slips past the check keeps the first and ask
   assert.match(lastText(paid), /<code>ch_second<\/code>/);
 });
 
+test("webapp: a window without sendData reaches the bot through start codes", () => {
+  assert.deepEqual(parseStartCode("psy"), { command: "psy" });
+  assert.equal(JSON.parse(parseStartCode("buy").data).type, "buy");
+  assert.deepEqual(JSON.parse(parseStartCode("r_gad7_0123012").data).answers, [0, 1, 2, 3, 0, 1, 2]);
+  assert.deepEqual(JSON.parse(parseStartCode("m_7_sleep-work").data).tags, ["sleep", "work"]);
+  assert.equal(JSON.parse(parseStartCode("t_1_0930_n150").data).tz, -150);
+  assert.equal(JSON.parse(parseStartCode("t_0_1900_a").data).tz, "auto");
+  assert.equal(parseStartCode("c_abcdefgh12"), null, "an invite code is not an app code");
+  assert.equal(parseStartCode("r_gad7_01<script>"), null);
+
+  const h = harness({ config: { webappUrl: "https://example.pages.dev/" } });
+  h.say("/start");
+  const saved = h.say("/start r_gad7_3333333");
+  assert.equal(h.store.history(777, "gad7").length, 1);
+  assert.ok(saved.some((action) => /21/.test(action.payload.text || "")));
+  // The same validation as sendData: a wrong answer count stores nothing.
+  h.say("/start r_gad7_33");
+  assert.equal(h.store.history(777, "gad7").length, 1);
+  assert.equal(h.say("/start buy").some((action) => action.method === "sendInvoice"), true);
+  // The main screen refreshes this chat's menu button with the hints.
+  const menu = h.say("/menu").find((action) => action.method === "setChatMenuButton");
+  assert.match(menu.payload.menu_button.web_app.url, /[?&]b=test_bot&psy=none&pp=177$/);
+});
+
 test("paywall: the window is told the state, and the bot still refuses a locked result", () => {
   const h = harness({ config: { webappUrl: "https://example.pages.dev/" } });
   h.say("/start");
   assert.equal(h.say("/app")[0].payload.reply_markup.keyboard[0][0].web_app.url,
-    "https://example.pages.dev/?pro=1&plan=trial&days=7&price=100");
+    "https://example.pages.dev/?pro=1&plan=trial&days=7&price=100&b=test_bot&psy=none&pp=177");
   h.clock.now += 20 * DAY;
   assert.equal(h.say("/app")[0].payload.reply_markup.keyboard[0][0].web_app.url,
-    "https://example.pages.dev/?pro=0&plan=expired&price=100");
+    "https://example.pages.dev/?pro=0&plan=expired&price=100&b=test_bot&psy=none&pp=177");
 
   // An edited client can still submit a locked scale: the bot is the gate.
   const submitted = h.router.handleUpdate({
@@ -2721,7 +2745,7 @@ test("webapp: /start offers the launch button only when a URL is configured", ()
   const started = withApp.say("/start");
   const keyboard = menuOf(started);
   // The lock state rides along in the query string as a hint for the window.
-  assert.equal(keyboard[0][0].web_app.url, "https://example.pages.dev/?pro=1&plan=trial&days=7&price=100");
+  assert.equal(keyboard[0][0].web_app.url, "https://example.pages.dev/?pro=1&plan=trial&days=7&price=100&b=test_bot&psy=none&pp=177");
   assert.match(keyboard[0][0].text, /Відкрити застосунок/);
   assert.deepEqual(keyboard[3], [{ text: "⭐ Повний доступ" }, { text: "🧑‍⚕️ Для фахівців" }]);
   assert.deepEqual(keyboard[4], [{ text: "🆘 Мені зараз погано" }], "SOS stays the bottom row, on its own");
@@ -3436,7 +3460,7 @@ test("access: once bought, the screen says so, and the keyboard drops the button
   assert.deepEqual(rows.map((row) => row.map((button) => button.text)),
     [["Відкрити застосунок"], ["📝 Тести", "📈 Результати"], ["🌿 Підтримка", "⚙️ Налаштування"],
       ["🧑‍⚕️ Для фахівців"], ["🆘 Мені зараз погано"]]);
-  assert.match(rows[0][0].web_app.url, /[?&]plan=pro&price=100$/);
+  assert.match(rows[0][0].web_app.url, /[?&]plan=pro&price=100&b=test_bot&psy=none&pp=177$/);
 
   const chatOnly = harness();
   chatOnly.say("/start");

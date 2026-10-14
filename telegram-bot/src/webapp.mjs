@@ -46,6 +46,46 @@ export function parseWebAppPayload(raw) {
   return fail("unknown payload type " + String(parsed.type));
 }
 
+// A Mini App opened from the menu button or a link cannot call sendData:
+// Telegram drops it silently. The app then opens t.me/<bot>?start=<code>
+// instead, and the chat receives "/start <code>". The code holds at most 64
+// characters of [A-Za-z0-9_-], so a weekly note and a booking request do not
+// fit and stay behind; everything else is re-encoded as the payload sendData
+// would have carried and goes through the same validation.
+//
+//   buy                     the pay button
+//   rep1, rep0              the specialist report, with or without notes
+//   del                     the delete button
+//   r_<instrument>_<digits> a finished questionnaire, one digit per answer
+//   m_<rating>_<tag-tag>    the mood check-in, tags optional
+//   t_<0|1>_<HHMM>_<zone>   reminders, zone "a" for auto or minutes, "n" for minus
+//   psy, clients, invite, admin, stats, book, privacy
+//                           a chat command the app has no screen for
+export const START_COMMANDS = ["psy", "clients", "invite", "admin", "stats", "book", "privacy"];
+
+export function parseStartCode(code) {
+  if (typeof code !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(code)) return null;
+  if (START_COMMANDS.indexOf(code) !== -1) return { command: code };
+  const payload = startPayload(code);
+  return payload ? { data: JSON.stringify(Object.assign({ v: PAYLOAD_VERSION }, payload)) } : null;
+}
+
+function startPayload(code) {
+  if (code === "buy") return { type: "buy" };
+  if (code === "del") return { type: "delete" };
+  if (code === "rep1" || code === "rep0") return { type: "report", notes: code === "rep1" };
+  let match = /^r_([a-z0-9]{1,16})_([0-9]{1,40})$/.exec(code);
+  if (match) return { type: "result", instrument: match[1], answers: match[2].split("").map(Number) };
+  match = /^m_([0-9]{1,2})(?:_([a-z]+(?:-[a-z]+)*))?$/.exec(code);
+  if (match) return { type: "mood", rating: Number(match[1]), tags: match[2] ? match[2].split("-") : [] };
+  match = /^t_([01])_([0-9]{2})([0-9]{2})_(a|n?[0-9]{1,3})$/.exec(code);
+  if (match) {
+    const zone = match[4] === "a" ? "auto" : (match[4][0] === "n" ? -Number(match[4].slice(1)) : Number(match[4]));
+    return { type: "reminders", enabled: match[1] === "1", time: match[2] + ":" + match[3], tz: zone };
+  }
+  return null;
+}
+
 function parseResult(parsed) {
   const instrument = getInstrument(String(parsed.instrument));
   if (!instrument) return fail("unknown instrument " + String(parsed.instrument));

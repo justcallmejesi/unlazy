@@ -325,6 +325,14 @@ details.practice summary { font-weight: 600; cursor: pointer; }
       <span class="chev">›</span>
     </button>
   </div>
+  <div class="menu-section">🧑‍⚕️ Для фахівців</div>
+  <div class="menu">
+    <button class="menu-item wide" data-go="psy">
+      <span class="emoji" aria-hidden="true">🗂</span>
+      <span class="body"><span class="title">Кабінет фахівця</span><span class="hint" id="psy-hint">Клієнти, їхня динаміка і звіти за згодою</span></span>
+      <span class="chev">›</span>
+    </button>
+  </div>
   <p class="disclaimer">Ці опитувальники це інструменти самоспостереження, а не діагноз. Підсумковий бал не замінює консультацію лікаря або психотерапевта.</p>
 </div>
 
@@ -447,6 +455,25 @@ details.practice summary { font-weight: 600; cursor: pointer; }
   <div class="card" id="access-free-card">
     <h2>Що назавжди безкоштовно</h2>
     <ul class="bullets" id="access-free"></ul>
+  </div>
+</div>
+
+<div id="psy" class="screen">
+  <button class="back" data-go="home">‹ Назад</button>
+  <h2>Кабінет фахівця</h2>
+  <p class="muted">Для психологів і психотерапевтів, які хочуть бачити стан клієнтів між зустрічами.</p>
+  <div class="callout" id="psy-status" hidden></div>
+  <div class="menu" id="psy-menu"></div>
+  <p class="muted" id="psy-note">Кнопки відкривають чат з ботом: кабінет працює там, а вікно закривається.</p>
+  <div class="card" id="psy-about">
+    <h2>Як це працює</h2>
+    <ul class="bullets">
+      <li>Клієнти проходять опитувальники і відмічають настрій у цьому боті.</li>
+      <li>За їхньою згодою Ви бачите бали, динаміку і звіт по кожному клієнту.</li>
+      <li>Сповіщення приходить, коли результат перетинає поріг або в PHQ-9 позначено питання про думки щодо смерті.</li>
+      <li>Клієнт сам вирішує, чи ділитися даними, і може відкликати згоду одним натисканням.</li>
+    </ul>
+    <p class="muted" id="psy-price">Кожного фахівця перевіряє власник бота. Після схвалення кабінет працює за щомісячною підпискою в зірках Telegram, її можна скасувати будь-коли.</p>
   </div>
 </div>
 
