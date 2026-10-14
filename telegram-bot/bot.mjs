@@ -14,6 +14,7 @@ import { pathToFileURL } from "node:url";
 import { loadConfig } from "./src/config.mjs";
 import { entitlement } from "./src/billing.mjs";
 import { TelegramClient, TelegramError } from "./src/telegram.mjs";
+import { heartbeatDue, ping, stalled } from "./src/health.mjs";
 import { Store } from "./src/store.mjs";
 import { SessionManager } from "./src/session.mjs";
 import { createRouter } from "./src/router.mjs";
@@ -51,6 +52,9 @@ export class BotRuntime {
     this.running = false;
     this.sweeping = false;
     this.tickTimer = null;
+    this.lastPollOkMs = Date.now();
+    this.lastPingMs = 0;
+    this.pingFailing = false;
   }
 
   // An action may carry `then`: a function of the call's result that returns
@@ -169,9 +173,31 @@ export class BotRuntime {
     const intervalMs = this.config.tickSeconds * 1000;
     const runTick = () => {
       this.sweepReminders().catch((error) => logError("reminder sweep failed: " + String(error && error.message)));
+      this.checkHealth(Date.now());
     };
     this.tickTimer = setInterval(runTick, intervalMs);
     runTick();
+  }
+
+  // A hung poll leaves a live process that answers nobody, so exit and let
+  // systemd start a fresh one. Healthy, the bot pings the outside monitor.
+  checkHealth(nowMs) {
+    if (this.running && stalled(this.lastPollOkMs, nowMs)) {
+      logError("no poll came back for " + Math.round((nowMs - this.lastPollOkMs) / 60000) + " min, exiting for a restart");
+      this.stop();
+      process.exit(1);
+    }
+    const state = { url: this.config.heartbeatUrl, lastPollOkMs: this.lastPollOkMs, lastPingMs: this.lastPingMs };
+    if (!heartbeatDue(state, nowMs)) return;
+    this.lastPingMs = nowMs;
+    ping(this.config.heartbeatUrl).then(() => {
+      if (this.pingFailing) log("heartbeat is back");
+      this.pingFailing = false;
+    }, (error) => {
+      // Logged once per outage, not every five minutes.
+      if (!this.pingFailing) logError("heartbeat failed: " + String(error && error.message));
+      this.pingFailing = true;
+    });
   }
 
   async loop() {
@@ -180,6 +206,7 @@ export class BotRuntime {
     while (this.running) {
       try {
         await this.pollOnce();
+        this.lastPollOkMs = Date.now();
         backoffMs = 1000;
       } catch (error) {
         if (error instanceof TelegramError && error.fatal) {
@@ -305,6 +332,7 @@ async function main() {
   } else {
     log("WEBAPP_URL is not set, running the chat-only flow");
   }
+  log(config.heartbeatUrl ? "heartbeat: every 5 min to the monitor" : "HEARTBEAT_URL is not set, no outside monitor");
 
   const runtime = new BotRuntime({ client, store, sessions, router, config });
   const defaults = resolveSchedule(null, config.reminder);

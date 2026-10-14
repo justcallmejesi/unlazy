@@ -100,6 +100,9 @@ REMINDER_ZONE=Europe/Kyiv
 # https address of the Mini App once it is deployed. Leave empty for chat only.
 WEBAPP_URL=
 
+# Ping URL of an outside monitor (Healthchecks.io). Empty means no alerts.
+HEARTBEAT_URL=
+
 # One-time full access price in Telegram Stars, and the free trial length.
 PRICE_STARS=150
 TRIAL_DAYS=7

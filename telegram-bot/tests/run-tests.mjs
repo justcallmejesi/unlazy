@@ -49,6 +49,7 @@ import {
 import { freeLines, unlockedLines } from "../src/offer.mjs";
 import { collectStats } from "../src/stats.mjs";
 import { adminStats } from "../src/psytexts.mjs";
+import { HEARTBEAT_EVERY_MS, STALL_MS, heartbeatDue, stalled } from "../src/health.mjs";
 import { psyClientsList } from "../src/psytexts.mjs";
 
 const filter = process.argv[2] || "";
@@ -3678,6 +3679,31 @@ test("help: the commands come grouped in menu order, each once, each answered", 
     assert.ok(text.includes("/" + entry.command + " "), entry.command);
     assert.doesNotMatch(textsOf(h.say("/" + entry.command)).join("\n"), /Не зрозумів команду/, entry.command);
   });
+});
+
+test("health: a hung poll counts as stalled after ten minutes, a slow one does not", () => {
+  const start = 1_000_000;
+  assert.equal(stalled(start, start + 60 * 1000), false);
+  assert.equal(stalled(start, start + STALL_MS), false);
+  assert.equal(stalled(start, start + STALL_MS + 1), true);
+});
+
+test("health: the heartbeat goes out every five minutes, and only while polling works", () => {
+  const now = 10_000_000;
+  const url = "https://hc-ping.com/test";
+  assert.equal(heartbeatDue({ url: null, lastPollOkMs: now, lastPingMs: 0 }, now), false, "no URL, no ping");
+  assert.equal(heartbeatDue({ url, lastPollOkMs: now, lastPingMs: 0 }, now), true, "first ping right away");
+  assert.equal(heartbeatDue({ url, lastPollOkMs: now, lastPingMs: now - 60 * 1000 }, now), false);
+  assert.equal(heartbeatDue({ url, lastPollOkMs: now, lastPingMs: now - HEARTBEAT_EVERY_MS }, now), true);
+  assert.equal(heartbeatDue({ url, lastPollOkMs: now - 5 * 60 * 1000, lastPingMs: 0 }, now), false,
+    "a bot that cannot reach Telegram must look dead to the monitor");
+});
+
+test("config: HEARTBEAT_URL is optional and must be https", () => {
+  assert.equal(loadConfig({ BOT_TOKEN: FAKE_TOKEN }, { envFile: false }).heartbeatUrl, null);
+  assert.equal(loadConfig({ BOT_TOKEN: FAKE_TOKEN, HEARTBEAT_URL: " https://hc-ping.com/abc " }, { envFile: false }).heartbeatUrl,
+    "https://hc-ping.com/abc");
+  assert.throws(() => loadConfig({ BOT_TOKEN: FAKE_TOKEN, HEARTBEAT_URL: "http://hc-ping.com/abc" }, { envFile: false }), /HEARTBEAT_URL/);
 });
 
 // --------------------------------------------------------------- runner

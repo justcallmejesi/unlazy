@@ -109,6 +109,12 @@ export function loadConfig(env = process.env, options = {}) {
     throw new Error("WEBAPP_URL must be an https URL, for example https://example.pages.dev/");
   }
 
+  // A monitor's ping URL, Healthchecks.io for one. Empty switches pings off.
+  const heartbeatUrl = String(env.HEARTBEAT_URL || "").trim();
+  if (heartbeatUrl && !/^https:\/\/[^\s]+$/.test(heartbeatUrl)) {
+    throw new Error("HEARTBEAT_URL must be an https URL, for example https://hc-ping.com/your-uuid");
+  }
+
   // The owner's account, so the offer works without extra configuration.
   // CONTACT_USERNAME overrides it; an empty value switches the offer off.
   const contactUsername = String(
@@ -144,6 +150,7 @@ export function loadConfig(env = process.env, options = {}) {
     token,
     apiBase: String(env.API_BASE || "https://api.telegram.org").replace(/\/+$/, ""),
     webappUrl: webappUrl || null,
+    heartbeatUrl: heartbeatUrl || null,
     dataFile,
     memoryOnly,
     botDir: BOT_DIR,
