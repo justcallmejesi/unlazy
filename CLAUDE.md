@@ -54,7 +54,21 @@ feature to sell.
 
 Paid: the sleep, stress, PCL-5 and wellbeing scales, the daily mood check-in
 (`/mood`), history (`/results`, `/last`), statistics, the weekly reminder and
-its settings (`/remind`, `/tz`).
+its settings (`/remind`, `/tz`), and every week of "Мій персонаж" after the
+first.
+
+"Мій персонаж" (`telegram-bot/webapp/character.js`, Mini App only) is a week
+of daily self-esteem challenges in three tiers, an aura that never burns, and
+a character who changes place per level. Its copy uses «ти» and a chosen
+he/she form. A PHQ-9 with item 9 marked in the last 14 days switches it to care
+mode: crisis contacts first, challenges paused. The art is SVG drawn in code;
+generated images are welcome only from a model that follows the prompt
+(keyless Pollinations returned an unrelated, sexualized picture and is not
+used).
+
+The Mini App opened from the menu button cannot call `sendData`. It then opens
+`t.me/<bot>?start=<code>` instead, and `parseStartCode` in `webapp.mjs` turns
+the code back into the same payload, validated the same way.
 
 The reply keyboard is the bot's menu: a main screen and five sections, every
 function a button, each section leading back and on to the next, and "Мені
@@ -110,11 +124,13 @@ blue, stress burgundy, PCL-5 green, wellbeing violet, mood amber. Light mode cle
 dark mode has one pair below the separation floor, which is why every chart
 carries its name plus a swatch and no plot ever holds two scales.
 
-## Helper LLM (paused)
+## Helper LLM
 
 The owner wants `justcallmejesi/freellmapi` used as a helper worker for bounded
-tasks, with every result checked before use. Paused on 2026-09-28 at the
-owner's request; resume only when asked. Found so far:
+tasks, with every result checked before use. Paused on 2026-09-28, resumed on
+2026-10-14 at the owner's request. On the owner's PC it is cloned to
+`C:\Users\1\freellmapi` with dependencies installed; it still has no provider
+keys. Found so far:
 
 - This environment's egress proxy blocks the provider hosts (Groq, OpenRouter,
   Cerebras, Mistral, keyless Kilo, OVH, AI Horde, LLM7). Only

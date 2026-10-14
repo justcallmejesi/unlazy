@@ -252,6 +252,63 @@ details.practice summary { font-weight: 600; cursor: pointer; }
 .chip { padding: 8px 14px; min-height: 40px; font-size: 15px; }
 .check { display: flex; align-items: center; gap: 10px; margin: 12px 0 0; font-size: 15px; }
 .check input { width: 22px; height: 22px; flex: none; }
+
+/* "Мій персонаж". The stage is a dark neon scene whatever the theme; the
+   sheet under it follows the app's own surfaces. */
+.menu-item.char-card { --scale-color: #A970FF; }
+.char-stage { position: relative; border-radius: var(--radius); overflow: hidden; background: #171127; margin-top: 4px; }
+.char-stage svg { display: block; width: 100%; height: auto; }
+.char-stage [data-hot] { cursor: pointer; }
+.char-stage [data-hot]:focus-visible { outline: none; filter: brightness(1.3); }
+.char-hud { position: absolute; left: 8px; right: 8px; top: 8px; display: flex; gap: 6px; align-items: center; pointer-events: none; }
+.char-hud .chip { background: rgba(13, 9, 24, .75); border: 1px solid #2F2550; border-radius: 999px; padding: 4px 9px; font-size: 12px; font-weight: 600; color: #F1ECFA; white-space: nowrap; min-height: 0; }
+.char-hud .meter { flex: 1 1 auto; min-width: 0; display: grid; gap: 2px; }
+.char-hud .bar { height: 7px; border-radius: 99px; background: rgba(255, 255, 255, .14); overflow: hidden; }
+.char-hud .bar i { display: block; height: 100%; border-radius: 99px; background: var(--aura); box-shadow: 0 0 10px var(--aura); transition: width .5s ease; }
+.char-hud small { font-size: 11px; color: #C9C1E0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.char-banner { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); text-align: center; pointer-events: none; color: #F1ECFA; font-size: 13px;
+  background: rgba(13, 9, 24, .88); border: 1px solid var(--aura); border-radius: 14px; padding: 10px 16px; box-shadow: 0 0 30px var(--aura); }
+.char-banner b { display: block; font-size: 22px; color: var(--aura); margin: 2px 0; }
+.char-toast { position: absolute; right: 10px; bottom: 10px; background: #221A38; color: #F1ECFA; border: 1px solid #2F2550; border-radius: 10px; padding: 6px 10px; font-size: 14px; font-weight: 600; }
+.char-tip { margin: 8px 2px 10px; font-size: 13px; }
+.char-sheet { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; display: grid; gap: 10px; min-width: 0; }
+.char-sheet h2 { margin: 0; }
+.char-sheet p { margin: 0; }
+/* No uppercase: a capital "З" in "1 з 7" reads as the digit 3. */
+.char-sheet .eyebrow { font-size: 13px; font-weight: 600; color: var(--ink-3); }
+.char-sheet .help { color: var(--ink-3); font-size: 13.5px; }
+.char-sheet .row { display: flex; gap: 8px; flex-wrap: wrap; }
+.char-sheet .btn { width: 100%; font: inherit; font-weight: 600; border-radius: 12px; padding: 13px; min-height: 48px; cursor: pointer;
+  border: 1px solid transparent; background: var(--accent); color: var(--accent-ink); }
+.char-sheet .btn.ghost { background: transparent; color: var(--accent); border-color: var(--line); }
+.char-sheet .field { margin: 2px 0 0; display: grid; gap: 6px; }
+.tiers { display: grid; gap: 8px; }
+.tier { text-align: left; border-radius: 12px; padding: 11px 12px; border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+  font: 14.5px/1.4 inherit; font-family: inherit; cursor: pointer; display: grid; gap: 4px; }
+.tier .name { font-weight: 700; font-size: 13px; letter-spacing: .02em; }
+.tier .xp { font-size: 12.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.tier.light .name { color: #3f9a12; }
+.tier.bold .name { color: #b07a00; }
+.tier.epic .name { color: #d0307f; }
+.tier[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.stickers { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.sticker { border-radius: 12px; background: var(--surface); border: 1px dashed var(--line); padding: 8px 4px; text-align: center; font-size: 11.5px; line-height: 1.25; color: var(--ink-3); display: grid; gap: 4px; justify-items: center; overflow-wrap: anywhere; }
+.sticker .e { font-size: 26px; line-height: 1; filter: grayscale(1) opacity(.35); }
+.sticker.got { border-style: solid; border-color: var(--accent); color: var(--ink); }
+.sticker.got .e { filter: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .char-stage .flame { transform-box: fill-box; transform-origin: 50% 100%; animation: flick .9s ease-in-out infinite alternate; }
+  .char-stage .flame:nth-child(2n) { animation-duration: 1.3s; }
+  .char-stage .flame:nth-child(3n) { animation-duration: .7s; }
+  @keyframes flick { from { transform: scaleY(.85) scaleX(1.05); opacity: .75; } to { transform: scaleY(1.15) scaleX(.92); opacity: 1; } }
+  .char-stage .ping { transform-box: fill-box; transform-origin: center; animation: ping 1.8s ease-out infinite; }
+  @keyframes ping { from { transform: scale(.6); opacity: .8; } to { transform: scale(1.6); opacity: 0; } }
+  .char-stage .mote { animation: rise 3s linear infinite; }
+  @keyframes rise { from { transform: translateY(0); opacity: 0; } 20% { opacity: 1; } to { transform: translateY(-60px); opacity: 0; } }
+  .char-stage .pulse { transform-box: fill-box; transform-origin: center; animation: pulse 2.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { transform: scale(1.06); opacity: .85; } }
+}
+.char-stage .ping { fill: none; stroke: #FFFFFF; stroke-width: 1.5; opacity: .7; }
 </style>
 </head>
 <body>
@@ -274,6 +331,14 @@ details.practice summary { font-weight: 600; cursor: pointer; }
       <span class="emoji" aria-hidden="true">🙂</span>
       <span class="body"><span class="title">Настрій сьогодні</span><span class="hint">Одна відмітка від 1 до 10</span></span>
       <span class="chev" id="mood-tail">›</span>
+    </button>
+  </div>
+  <div class="menu-section">✨ Мій персонаж</div>
+  <div class="menu">
+    <button class="menu-item wide char-card" data-go="character">
+      <span class="emoji" aria-hidden="true">🔥</span>
+      <span class="body"><span class="title">Аура</span><span class="hint" id="char-hint">Щоденні виклики для самооцінки, персонаж росте разом з тобою</span></span>
+      <span class="chev">›</span>
     </button>
   </div>
   <div class="menu-section">📈 Результати</div>
@@ -456,6 +521,19 @@ details.practice summary { font-weight: 600; cursor: pointer; }
     <h2>Що назавжди безкоштовно</h2>
     <ul class="bullets" id="access-free"></ul>
   </div>
+</div>
+
+<div id="character" class="screen">
+  <button class="back" data-go="home">‹ Назад</button>
+  <div class="char-stage">
+    <div id="char-scene"></div>
+    <div class="char-hud" id="char-hud"></div>
+    <div class="char-banner" id="char-banner" hidden></div>
+    <div class="char-toast" id="char-toast" hidden></div>
+  </div>
+  <p class="muted char-tip">Натискай на дошку, двері, стіну стікерів, кристал, компаньйона і персонажа.</p>
+  <div class="char-sheet" id="char-sheet" aria-live="polite"></div>
+  <p class="disclaimer">Виклики це вправи для самопідтримки, а не терапія і не оцінка особистості.</p>
 </div>
 
 <div id="psy" class="screen">

@@ -15,6 +15,7 @@ import {
   BOOKING_FORMATS, BOOKING_TIMES, MOOD_MAX, MOOD_MIN, MOOD_TAGS, PRACTICE_IDS, PRACTICES, SOS_EMERGENCY,
   SOS_INTRO, SOS_STEPS, SOS_TITLE, practicesFor,
 } from "./selfhelp.mjs";
+import { mountCharacter } from "./character.js";
 import { OFFER_TITLE, freeLines, offerStatus, payLabel, priceLine, starWord, unlockedLines } from "./offer.mjs";
 
 // One hue per scale. On a light surface the four clear every check; on the
@@ -129,7 +130,10 @@ function submit(payload) {
 // CloudStorage is per user per bot and survives reinstalls. localStorage is the
 // fallback for a plain browser and for clients older than Bot API 6.9. Both can
 // fail or come back empty, so every screen renders correctly with no data.
-const cloud = tg && tg.CloudStorage && typeof tg.CloudStorage.getKeys === "function" ? tg.CloudStorage : null;
+// The script defines CloudStorage on every client, but below 6.9 each call
+// throws WebAppMethodUnsupported and the promise around it never settles.
+const cloud = tg && tg.CloudStorage && typeof tg.CloudStorage.getKeys === "function" &&
+  typeof tg.isVersionAtLeast === "function" && tg.isVersionAtLeast("6.9") ? tg.CloudStorage : null;
 
 function localGet(key) {
   try {
@@ -215,6 +219,7 @@ function decodeResult(raw) {
     maxScore: Number.isFinite(parsed.maxScore) ? parsed.maxScore : instrument.maxScore,
     severity: typeof parsed.severity === "string" ? parsed.severity : severityOf(instrument, parsed.score),
     note: typeof parsed.note === "string" && parsed.note.trim() ? parsed.note.trim().slice(0, MAX_NOTE_LENGTH) : null,
+    risk: parsed.risk === true,
     completedAt: parsed.completedAt,
     at,
   };
@@ -277,6 +282,8 @@ function saveResultLocally(result) {
     maxScore: result.maxScore,
     severity: result.severity,
     note: result.note || null,
+    // Kept so "Мій персонаж" can switch to care mode after a marked item 9.
+    risk: result.risk === true,
     completedAt: result.completedAt,
   };
   return storageSet(RESULT_PREFIX + Date.parse(result.completedAt), JSON.stringify(record));
@@ -1145,6 +1152,7 @@ Array.prototype.forEach.call(document.querySelectorAll("[data-go]"), (node) => {
     if (target === "booking") renderBooking();
     if (target === "access") renderAccess("");
     if (target === "psy") renderPsy();
+    if (target === "character") character.show();
     if (target === "mood") {
       renderMood();
       if (!state.unlocked) return;
@@ -1245,6 +1253,30 @@ $("data-delete").addEventListener("click", () => {
   });
 });
 
+// A marked PHQ-9 item 9 in the last two weeks puts the character in care mode.
+function recentRisk() {
+  const since = Date.now() - 14 * 24 * 60 * 60 * 1000;
+  return state.results.some((entry) => entry.instrument === "phq9" && entry.risk && entry.at >= since);
+}
+
+const character = mountCharacter({
+  storageGetMany,
+  storageSet,
+  haptic,
+  isUnlocked: () => state.unlocked,
+  riskActive: recentRisk,
+  openAccess,
+  openSos: () => {
+    renderSos();
+    show("sos");
+  },
+  userName: () => {
+    const user = tg && tg.initDataUnsafe && tg.initDataUnsafe.user;
+    return user && user.first_name ? String(user.first_name).slice(0, 40) : "";
+  },
+});
+
 ready();
 renderHome();
 loadResults().then((results) => { state.results = results; });
+character.hint().then((text) => { $("char-hint").textContent = text; }).catch(() => { /* keeps the default hint */ });
