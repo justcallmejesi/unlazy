@@ -296,7 +296,21 @@ details.practice summary { font-weight: 600; cursor: pointer; }
 .tier[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .stickers { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .sticker { border-radius: 12px; background: var(--surface); border: 1px dashed var(--line); padding: 8px 4px; text-align: center; font-size: 11.5px; line-height: 1.25; color: var(--ink-3); display: grid; gap: 4px; justify-items: center; overflow-wrap: anywhere; }
-.sticker .e { font-size: 26px; line-height: 1; filter: grayscale(1) opacity(.35); }
+.sticker .e { width: 44px; height: 44px; object-fit: contain; filter: grayscale(1) opacity(.35); }
+.won { display: flex; align-items: center; gap: 12px; }
+.won .e { width: 56px; height: 56px; object-fit: contain; flex: none; }
+.picks { display: grid; gap: 8px; }
+.picks.avatars { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.picks.pets { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.picks.auras { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.picks.forms { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pick { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+  min-height: 48px; padding: 6px; cursor: pointer; display: grid; place-items: center; }
+.pick img { width: 100%; height: 86px; object-fit: contain; }
+.picks.pets .pick img { height: 52px; }
+.pick .none { font-size: 12px; color: var(--ink-3); line-height: 1.2; }
+.pick i { display: block; width: 26px; height: 26px; border-radius: 50%; }
+.pick[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 2px var(--accent); }
 .sticker.got { border-style: solid; border-color: var(--accent); color: var(--ink); }
 .sticker.got .e { filter: none; }
 @media (prefers-reduced-motion: no-preference) {
@@ -372,6 +386,11 @@ details.practice summary { font-weight: 600; cursor: pointer; }
     <button class="menu-item" data-go="booking" id="booking-card" hidden>
       <span class="emoji" aria-hidden="true">🗓</span>
       <span class="body"><span class="title">Консультація</span><span class="hint">Готове повідомлення фахівцю</span></span>
+      <span class="chev">›</span>
+    </button>
+    <button class="menu-item wide" id="homework-card" type="button">
+      <span class="emoji" aria-hidden="true">📝</span>
+      <span class="body"><span class="title">Домашні завдання</span><span class="hint">Від Вашого фахівця, з позначкою «Виконано»</span></span>
       <span class="chev">›</span>
     </button>
   </div>

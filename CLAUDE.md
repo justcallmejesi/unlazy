@@ -52,19 +52,21 @@ the consultation request (`/book`). A questionnaire that asks about self-harm
 never ends in a payment prompt, and access to one's own health data is not a
 feature to sell.
 
-Paid: the sleep, stress, PCL-5 and wellbeing scales, the daily mood check-in
-(`/mood`), history (`/results`, `/last`), statistics, the weekly reminder and
+Paid: the sleep, stress, PCL-5, wellbeing and self-esteem scales, the daily
+mood check-in (`/mood`), history (`/results`, `/last`), statistics, the weekly reminder and
 its settings (`/remind`, `/tz`), and every week of "Мій персонаж" after the
 first.
 
-"Мій персонаж" (`telegram-bot/webapp/character.js`, Mini App only) is a week
-of daily self-esteem challenges in three tiers, an aura that never burns, and
-a character who changes place per level. Its copy uses «ти» and a chosen
-he/she form. A PHQ-9 with item 9 marked in the last 14 days switches it to care
-mode: crisis contacts first, challenges paused. The art is SVG drawn in code;
-generated images are welcome only from a model that follows the prompt
-(keyless Pollinations returned an unrelated, sexualized picture and is not
-used).
+"Мій персонаж" (`telegram-bot/webapp/character.js`, Mini App only) is daily
+challenges in three tiers, four weekly programs in turn (self-esteem, anxiety,
+energy and mood, self-support), an aura that never burns, and a character who
+changes place per level. Its copy uses «ти» and a chosen he/she form. A PHQ-9
+with item 9 marked in the last 14 days switches it to care mode: crisis
+contacts first, challenges paused. Locations, four characters in six poses,
+pets, props and stickers are painted with `gemini-3.1-flash-lite-image` as
+sprite sheets and keyed out. Images are welcome only from a model that follows
+the prompt (keyless Pollinations returned an unrelated, sexualized picture and
+is not used).
 
 The Mini App opened from the menu button cannot call `sendData`. It then opens
 `t.me/<bot>?start=<code>` instead, and `parseStartCode` in `webapp.mjs` turns
@@ -77,6 +79,10 @@ so typed text never matches one. The offer lives behind "⭐ Повний дос
 main-screen button for anyone who has not bought (gone after purchase), a Mini
 App card, and `/buy`. It is a one-time purchase, so it is never labelled a
 subscription.
+
+Homework (`/homework`, the client card): a specialist with access and the
+client's consent writes a task, the client is notified with a done button, and
+the specialist hears back when it is done. Free for the client.
 
 Specialist mode is a separate monthly Stars subscription, `PSY_PRICE_STARS` 300,
 sold through `createInvoiceLink` with `subscription_period`. Who pays: a client
@@ -95,8 +101,9 @@ the same breach. The wellbeing scale is written for this bot instead, like
 sleep and stress, and it is the one scale where higher is better, so its
 threshold is crossed from above (`higherIsBetter`, `crossesCutoff`).
 
-The sleep, stress and wellbeing scales are written for this bot, not taken from a
-published instrument: ISI and PSS-10 are copyrighted and commercial use needs
+The sleep, stress, wellbeing and self-esteem scales are written for this bot,
+not taken from a published instrument (the self-esteem items restate no
+Rosenberg item): ISI and PSS-10 are copyrighted and commercial use needs
 the rightsholder's permission. Every result of the bot's own scales states that
 it is self-observation and not a validated screening tool. Keep it that way, or
 license a real instrument.
@@ -120,7 +127,9 @@ Telegram never sends it; the person does. Emergency services always appear
 before the personal contact, and `/contact` stays free.
 
 Chart colours are per scale: anxiety red, depression dark blue, sleep light
-blue, stress burgundy, PCL-5 green, wellbeing violet, mood amber. Light mode clears every check in the dataviz validator;
+blue, stress burgundy, PCL-5 green, wellbeing violet, self-esteem pink, mood
+amber. The self-esteem pink has not been through the validator yet; for the
+rest, light mode clears every check in the dataviz validator;
 dark mode has one pair below the separation floor, which is why every chart
 carries its name plus a swatch and no plot ever holds two scales.
 

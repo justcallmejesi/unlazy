@@ -436,6 +436,7 @@ const PSY_TILES = {
   cabinet: { emoji: "🗂", title: "Мій кабінет", hint: "Статус, підписка, посилання", cmd: "psy" },
   clients: { emoji: "👥", title: "Мої клієнти", hint: "Бали, динаміка, картки", cmd: "clients" },
   invite: { emoji: "🔗", title: "Запросити клієнта", hint: "Посилання на згоду", cmd: "invite" },
+  homework: { emoji: "📝", title: "Домашка клієнтам", hint: "Клієнт отримає сповіщення", cmd: "homework" },
   apply: { emoji: "📝", title: "Подати заявку", hint: "Ім'я, освіта, умови", cmd: "psy", wide: true },
   status: { emoji: "⏳", title: "Статус заявки", hint: "Відкрити в чаті", cmd: "psy", wide: true },
   subscribe: { emoji: "⭐", title: "Оформити підписку", hint: "", cmd: "psy", wide: true },
@@ -444,8 +445,8 @@ const PSY_TILES = {
 };
 
 function psyTileIds() {
-  if (PSY === "admin") return ["clients", "invite", "requests", "stats", "cabinet"];
-  if (PSY === "subscribed") return ["clients", "invite", "cabinet"];
+  if (PSY === "admin") return ["clients", "homework", "invite", "requests", "stats", "cabinet"];
+  if (PSY === "subscribed") return ["clients", "homework", "invite", "cabinet"];
   if (PSY === "pending" || PSY === "rejected") return ["status"];
   if (PSY === "expired" || PSY === "unsubscribed") return ["subscribe", "cabinet"];
   if (PSY === "none") return ["apply"];
@@ -1201,6 +1202,11 @@ $("rem-save").addEventListener("click", async () => {
 });
 
 $("sos-contact").addEventListener("click", openContact);
+// The tasks live with the bot, so the tile opens them in the chat.
+$("homework-card").addEventListener("click", () => {
+  haptic("light");
+  if (!openBot("homework")) window.alert("Відкрийте в чаті команду /homework.");
+});
 
 $("mood-save").addEventListener("click", async () => {
   if (!state.mood.rating) return;
