@@ -65,6 +65,7 @@ export const COMMAND_GROUPS = [
     { command: "stress", description: "Рівень напруження (8 питань)" },
     { command: "pcl5", description: "PCL-5: посттравматичний стрес (20 питань)" },
     { command: "wellbeing", description: "Самопочуття: ресурс і опора (6 питань)" },
+    { command: "selfesteem", description: "Самооцінка: ставлення до себе (8 питань)" },
     { command: "mood", description: "Відмітити настрій сьогодні (повний доступ)" },
   ] },
   { title: "Результати", commands: [
@@ -92,6 +93,7 @@ export const COMMAND_GROUPS = [
   { title: "Для фахівців", commands: [
     { command: "psy", description: "Кабінет фахівця: для психологів" },
     { command: "clients", description: "Мої клієнти (кабінет фахівця)" },
+    { command: "homework", description: "Домашні завдання від фахівця" },
     { command: "invite", description: "Посилання для клієнтів (кабінет фахівця)" },
   ] },
   { title: "Інше", commands: [
@@ -437,6 +439,7 @@ const MENU_SECTIONS = [
       { label: "🧘 Техніки самодопомоги", command: "selfhelp" },
       { label: "🗓 Записатися на консультацію", command: "book" },
       { label: "💬 Звернутися по допомогу", command: "contact" },
+      { label: "📝 Домашні завдання", command: "homework" },
     ],
   },
   {
@@ -459,6 +462,7 @@ const MENU_SECTIONS = [
       { label: "🩺 Кабінет фахівця", command: "psy" },
       { label: "👥 Мої клієнти", command: "clients" },
       { label: "🔗 Посилання для клієнтів", command: "invite" },
+      { label: "📝 Домашка клієнтам", command: "homework" },
       { label: "📊 Статистика бота", command: "stats", admin: true },
       { label: "📋 Заявки фахівців", command: "admin", admin: true },
     ],
@@ -567,17 +571,20 @@ export function appRejected() {
 }
 
 export function startKeyboard(unlocked = true) {
-  const paidRow = PAID_INSTRUMENT_LIST.map((instrument) => ({
+  const paid = PAID_INSTRUMENT_LIST.map((instrument) => ({
     text: unlocked ? instrument.title : instrument.title + " 🔒",
     callback_data: "s|" + instrument.id,
   }));
+  // Three to a row: five titles in one row are cut off on a phone.
+  const paidRows = [];
+  for (let at = 0; at < paid.length; at += 3) paidRows.push(paid.slice(at, at + 3));
   return {
     inline_keyboard: [
       FREE_INSTRUMENT_LIST.map((instrument) => ({
         text: instrument.title,
         callback_data: "s|" + instrument.id,
       })),
-      paidRow,
+      ...paidRows,
       [
         { text: unlocked ? "Настрій сьогодні" : "Настрій сьогодні 🔒", callback_data: "m|ask" },
         { text: "Техніки самодопомоги", callback_data: "pp|menu" },

@@ -159,6 +159,7 @@ export function psyDashboard(state, link, clientCount, until) {
 export function psyDashboardKeyboard(state) {
   const rows = [
     [{ text: "Мої клієнти", callback_data: "py|clients" }],
+    [{ text: "📝 Домашка клієнтам", callback_data: "py|homework" }],
     [{ text: "Нове посилання", callback_data: "py|newinv" }],
   ];
   if (state.kind === "subscribed") {
@@ -210,9 +211,85 @@ export function psyClientsKeyboard(entries) {
   };
 }
 
+// ---------------------------------------------------------------- homework
+
+// The specialist writes the task as a plain message; the client gets it with
+// one button to mark it done, and the specialist hears back when they do.
+export function homeworkAsk(clientName) {
+  return "📝 <b>Домашнє завдання для " + escapeHtml(clientName || "клієнта") + "</b>\n\n" +
+    "Напишіть завдання одним повідомленням: що зробити і до коли. Клієнт отримає його в цьому боті " +
+    "з кнопкою «Виконано».\n\nПередумали: /cancel";
+}
+
+export function homeworkSent(clientName) {
+  return "Завдання надіслано: " + escapeHtml(clientName || "клієнт") + ". Коли його позначать виконаним, я повідомлю.";
+}
+
+export function homeworkForClient(psyName, text) {
+  return "📝 <b>Нове домашнє завдання</b> від " + escapeHtml(psyName || "фахівця") + "\n\n" + escapeHtml(text) +
+    "\n\nКоли зробите, натисніть «Виконано». Усі завдання: /homework";
+}
+
+export function homeworkDoneKeyboard(id) {
+  return { inline_keyboard: [[{ text: "✅ Виконано", callback_data: "hd|" + id }]] };
+}
+
+export function homeworkDoneForPsy(clientName, text) {
+  const short = text.length > 200 ? text.slice(0, 200) + "..." : text;
+  return "✅ " + escapeHtml(clientName || "Клієнт") + ": домашнє завдання виконано\n<i>" +
+    escapeHtml(short) + "</i>";
+}
+
+// The client's own list: open first, then the last few done.
+export function homeworkList(entries, nameOf, dateOf) {
+  if (!entries.length) {
+    return "📝 <b>Домашні завдання</b>\n\nПоки що завдань немає. Їх дає фахівець, якому Ви надали згоду " +
+      "в цьому боті, і вони приходять сюди повідомленням.";
+  }
+  const open = entries.filter((entry) => !entry.doneAt);
+  const done = entries.filter((entry) => entry.doneAt).slice(-5).reverse();
+  const lines = ["📝 <b>Домашні завдання</b>"];
+  if (open.length) {
+    lines.push("", "<b>Відкриті</b>");
+    open.forEach((entry, index) => lines.push((index + 1) + ". " + escapeHtml(entry.text) +
+      " <i>(" + escapeHtml(nameOf(entry.psy)) + ", " + dateOf(entry.createdAt) + ")</i>"));
+  } else {
+    lines.push("", "Усі завдання виконані. Так тримати!");
+  }
+  if (done.length) {
+    lines.push("", "<b>Виконані</b>");
+    done.forEach((entry) => lines.push("✅ " + escapeHtml(entry.text.length > 120 ? entry.text.slice(0, 120) + "..." : entry.text)));
+  }
+  return lines.join("\n");
+}
+
+export function homeworkListKeyboard(entries) {
+  const open = entries.filter((entry) => !entry.doneAt);
+  if (!open.length) return null;
+  return {
+    inline_keyboard: open.slice(0, 10).map((entry, index) => [{
+      text: "✅ Виконано: " + (index + 1) + ". " + (entry.text.length > 30 ? entry.text.slice(0, 30) + "..." : entry.text),
+      callback_data: "hd|" + entry.id,
+    }]),
+  };
+}
+
+// For a specialist: whom to give a task.
+export function homeworkPickClient(hasClients) {
+  return hasClients
+    ? "📝 <b>Домашка клієнтам</b>\n\nОберіть клієнта. Завдання прийде клієнту в цей бот одразу, з кнопкою «Виконано»."
+    : "📝 <b>Домашка клієнтам</b>\n\nПоки немає клієнтів зі згодою. Надішліть клієнту посилання з /psy.";
+}
+
+export function homeworkPickKeyboard(clients) {
+  if (!clients.length) return null;
+  return { inline_keyboard: clients.slice(0, 30).map((client) => [{ text: "📝 " + client.label, callback_data: "hw|" + client.chatId }]) };
+}
+
 export function psyClientKeyboard(chatId) {
   return {
     inline_keyboard: [
+      [{ text: "📝 Дати домашнє завдання", callback_data: "hw|" + chatId }],
       [{ text: "Звіт файлом", callback_data: "clr|" + chatId }],
       [{ text: "Відключити клієнта", callback_data: "cld|" + chatId }],
     ],

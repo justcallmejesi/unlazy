@@ -20,6 +20,7 @@ export const REPORT_COLORS = {
   stress: "#8f1f3f",
   pcl5: "#008300",
   wellbeing: "#6a45c2",
+  selfesteem: "#c2369c",
   mood: "#c98500",
 };
 

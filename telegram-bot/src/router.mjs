@@ -47,7 +47,11 @@ import {
   psyDashboardKeyboard, psyDisconnected, psyGone, psyInactive, psyIntro, psyInvoiceKeyboard,
   psyInvoiceMessage, psyNeedsAccess, psyNewInvite, psyPending, psyRejected, psyRenewed, psyResumed,
   psySubscribeKeyboard, psyTerms, psyTermsKeyboard, revokeKeyboard, revoked,
+  homeworkAsk, homeworkDoneForPsy, homeworkDoneKeyboard, homeworkForClient, homeworkList, homeworkListKeyboard,
+  homeworkPickClient, homeworkPickKeyboard, homeworkSent,
 } from "./psytexts.mjs";
+import { MAX_HOMEWORK_PER_USER, MAX_HOMEWORK_TEXT } from "./store.mjs";
+import { randomBytes } from "node:crypto";
 import { parseStartCode, parseWebAppPayload } from "./webapp.mjs";
 
 const HTML = { parse_mode: "HTML" };
@@ -453,6 +457,13 @@ export function createRouter(context) {
           escapeHtml(entry.note.length > 300 ? entry.note.slice(0, 300) + "..." : entry.note) + "</i>"));
       }
     }
+    // Only the tasks this specialist gave, never another specialist's.
+    const tasks = client.homework.filter((entry) => entry.psy === Number(chatId)).slice(-5);
+    if (tasks.length) {
+      lines.push("", "<b>Домашні завдання</b>");
+      tasks.forEach((entry) => lines.push((entry.doneAt ? "✅ " : "⏳ ") + escapeHtml(entry.text.length > 120
+        ? entry.text.slice(0, 120) + "..." : entry.text)));
+    }
     return [send(chatId, lines.join("\n"), { reply_markup: psyClientKeyboard(clientChatId) })];
   }
 
@@ -476,6 +487,88 @@ export function createRouter(context) {
         },
       },
     }];
+  }
+
+  // ---------------------------------------------------------- homework
+
+  // A specialist who tapped "Дати домашнє завдання" and has not written it
+  // yet. In memory on purpose: a restart only means tapping again.
+  const homeworkDrafts = new Map();
+  const HOMEWORK_DRAFT_MS = 30 * 60 * 1000;
+
+  function homeworkDraft(chatId) {
+    const draft = homeworkDrafts.get(Number(chatId));
+    if (!draft) return null;
+    if (now() - draft.at > HOMEWORK_DRAFT_MS) {
+      homeworkDrafts.delete(Number(chatId));
+      return null;
+    }
+    return draft;
+  }
+
+  // The same three checks as a client card: approved, paid up, consent in force.
+  function homeworkStart(chatId, clientChatId) {
+    const denied = requireActive(chatId);
+    if (denied) return denied;
+    const client = store.hasUser(clientChatId) ? store.user(clientChatId) : null;
+    const share = activeShare(client, chatId);
+    if (!share) return [send(chatId, "Цей клієнт не надав згоди або відкликав її.")];
+    sessions.clearAll(chatId);
+    homeworkDrafts.set(Number(chatId), { client: Number(clientChatId), at: now() });
+    return [send(chatId, homeworkAsk(share.clientName))];
+  }
+
+  function homeworkSave(chatId, draft, text) {
+    homeworkDrafts.delete(Number(chatId));
+    const body = text.trim().slice(0, MAX_HOMEWORK_TEXT);
+    if (!body) return [];
+    const client = store.hasUser(draft.client) ? store.user(draft.client) : null;
+    const share = activeShare(client, chatId);
+    if (!share || requireActive(chatId)) return [send(chatId, "Не вдалося надіслати: згоди клієнта або доступу до кабінету вже немає.")];
+    const entry = {
+      id: randomBytes(6).toString("hex"), psy: Number(chatId), text: body,
+      createdAt: new Date(now()).toISOString(), doneAt: null,
+    };
+    store.updateUser(draft.client, { homework: client.homework.concat([entry]).slice(-MAX_HOMEWORK_PER_USER) });
+    return [
+      send(chatId, homeworkSent(share.clientName)),
+      send(draft.client, homeworkForClient(psyName(chatId), body), { reply_markup: homeworkDoneKeyboard(entry.id) }),
+    ];
+  }
+
+  function homeworkDone(chatId, id) {
+    const user = store.hasUser(chatId) ? store.user(chatId) : null;
+    const entry = user ? user.homework.find((item) => item.id === id) : null;
+    if (!entry) return { note: "Завдання не знайдено", actions: [] };
+    if (entry.doneAt) return { note: "Вже позначено", actions: [] };
+    entry.doneAt = new Date(now()).toISOString();
+    store.touch();
+    // The specialist hears back only while the consent still stands.
+    const share = activeShare(user, entry.psy);
+    const actions = [send(chatId, "✅ Позначено виконаним. Молодець, що зробили це!")];
+    if (share) actions.push(send(entry.psy, homeworkDoneForPsy(share.clientName, entry.text)));
+    return { note: "Виконано", actions };
+  }
+
+  // /homework: the person's own tasks, and for an active specialist the
+  // client picker as well.
+  function homeworkActions(chatId) {
+    const user = store.user(chatId);
+    const actions = [];
+    const psyActive = stateOf(chatId).active && user.psy;
+    if (user.homework.length || !psyActive) {
+      const dateOf = (iso) => dateFor(chatId, Date.parse(iso));
+      const keyboard = homeworkListKeyboard(user.homework);
+      actions.push(send(chatId, homeworkList(user.homework, psyName, dateOf), keyboard ? { reply_markup: keyboard } : {}));
+    }
+    if (psyActive) {
+      const clients = clientsOf(store, chatId).map((entry) => ({
+        chatId: entry.user.chatId, label: entry.share.clientName || "Клієнт",
+      }));
+      const keyboard = homeworkPickKeyboard(clients);
+      actions.push(send(chatId, homeworkPickClient(clients.length > 0), keyboard ? { reply_markup: keyboard } : {}));
+    }
+    return actions;
   }
 
   // Alerts only while the specialist's cabinet is active; the client always
@@ -794,6 +887,8 @@ export function createRouter(context) {
       }
       case "clients":
         return clientsActions(chatId);
+      case "homework":
+        return homeworkActions(chatId);
       case "privacy":
         return privacyActions(chatId);
       case "admin":
@@ -801,6 +896,10 @@ export function createRouter(context) {
       case "stats":
         return statsActions(chatId);
       case "cancel": {
+        if (homeworkDraft(chatId)) {
+          homeworkDrafts.delete(Number(chatId));
+          return [send(chatId, "Завдання не надіслано.")];
+        }
         const open = sessions.clearAll(chatId);
         if (open.session) return [send(chatId, "Опитувальник перервано. Відповіді не збережені.")];
         if (open.booking) return [send(chatId, "Запис перервано. Почати знову: /book")];
@@ -842,6 +941,7 @@ export function createRouter(context) {
           results: user.results,
           moods: user.moods,
           shares: user.shares,
+          homework: user.homework,
           psy: user.psy,
         });
         if (body.length <= EXPORT_INLINE_LIMIT) return [send(chatId, exportMessage(body))];
@@ -1013,6 +1113,8 @@ export function createRouter(context) {
     const target = menuTarget(text);
     if (target) return menuTargetActions(chatId, target, message);
     if (parsed) return handleCommand(chatId, parsed, message);
+    const draft = homeworkDraft(chatId);
+    if (draft && text.trim()) return homeworkSave(chatId, draft, text);
     const application = sessions.application(chatId, now());
     if (application) return applicationText(chatId, application, text);
     const booking = sessions.booking(chatId, now());
@@ -1145,6 +1247,7 @@ export function createRouter(context) {
         return [ack(query.id)].concat(subscribeActions(chatId));
       }
       if (parts[1] === "clients") return [ack(query.id)].concat(clientsActions(chatId));
+      if (parts[1] === "homework") return [ack(query.id)].concat(homeworkActions(chatId));
       if (parts[1] === "newinv") return [ack(query.id)].concat(handleCommand(chatId, { command: "invite", args: "new" }));
       if (parts[1] === "cancel" || parts[1] === "resume") {
         const user = store.hasUser(chatId) ? store.user(chatId) : null;
@@ -1203,6 +1306,11 @@ export function createRouter(context) {
         send(psyChatId, psyClientRevoked(share.clientName))];
     }
     if (parts[0] === "cl") return [ack(query.id)].concat(clientCard(chatId, Number(parts[1])));
+    if (parts[0] === "hw") return [ack(query.id)].concat(homeworkStart(chatId, Number(parts[1])));
+    if (parts[0] === "hd") {
+      const outcome = homeworkDone(chatId, parts[1]);
+      return [ack(query.id, outcome.note)].concat(outcome.actions);
+    }
     if (parts[0] === "clr") return [ack(query.id, "Готую звіт")].concat(clientReport(chatId, Number(parts[1])));
     if (parts[0] === "cld") {
       const clientChatId = Number(parts[1]);

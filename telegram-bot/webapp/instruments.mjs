@@ -384,11 +384,68 @@ export const WELLBEING = {
   ],
 };
 
+// Written for this bot, like the sleep, stress and wellbeing scales, and for
+// "Мій персонаж" in the Mini App. No item restates the Rosenberg scale. Half
+// the items are worded the critical way round and count backwards, so a high
+// total always means a steadier attitude to oneself. Higher is better, so the
+// threshold is crossed from above, as on the wellbeing scale.
+const SELFESTEEM_OPTIONS = [
+  { value: 0, label: "Зовсім не так" },
+  { value: 1, label: "Скоріше не так" },
+  { value: 2, label: "Скоріше так" },
+  { value: 3, label: "Цілком так" },
+];
+
+const selfEsteemItem = (text, reverse = false) => ({ text, options: SELFESTEEM_OPTIONS, scored: true, reverse });
+
+export const SELFESTEEM = {
+  id: "selfesteem",
+  title: "Самооцінка",
+  subtitle: "ставлення до себе",
+  command: "/selfesteem",
+  prompt: "Наскільки це про Вас протягом останніх 2 тижнів?",
+  maxScore: 24,
+  cutoff: 10,
+  higherIsBetter: true,
+  paid: true,
+  caveat: OWN_SCALE_CAVEAT,
+  items: [
+    selfEsteemItem("Я ставлюся до себе з повагою"),
+    selfEsteemItem("Коли щось не виходить, я вважаю себе невдахою", true),
+    selfEsteemItem("Я можу назвати свої сильні сторони"),
+    selfEsteemItem("Я порівнюю себе з іншими не на свою користь", true),
+    selfEsteemItem("Я дозволяю собі помилятися і вчитися на помилках"),
+    selfEsteemItem("Мені важко прийняти похвалу або комплімент", true),
+    selfEsteemItem("Я відчуваю, що моя думка має значення"),
+    selfEsteemItem("Внутрішній критик звучить у мені голосніше за підтримку", true),
+  ],
+  bands: [
+    {
+      max: 10,
+      label: "вразлива самооцінка",
+      description: "Зараз ставлення до себе здебільшого критичне: важко бачити свої сильні сторони " +
+        "і легко знецінити себе через помилку.",
+    },
+    {
+      max: 17,
+      label: "нестійка самооцінка",
+      description: "Опора на себе є, але хитається: у добрі дні вистачає поваги до себе, у важкі " +
+        "вмикається внутрішній критик.",
+    },
+    {
+      max: 24,
+      label: "стійка самооцінка",
+      description: "Здебільшого Ви ставитеся до себе з повагою, бачите свої сильні сторони і " +
+        "переживаєте помилки без різкого самозвинувачення.",
+    },
+  ],
+};
+
 export const INSTRUMENTS = {
   [GAD7.id]: GAD7, [PHQ9.id]: PHQ9, [SLEEP.id]: SLEEP, [STRESS.id]: STRESS,
-  [PCL5.id]: PCL5, [WELLBEING.id]: WELLBEING,
+  [PCL5.id]: PCL5, [WELLBEING.id]: WELLBEING, [SELFESTEEM.id]: SELFESTEEM,
 };
-export const INSTRUMENT_LIST = [GAD7, PHQ9, SLEEP, STRESS, PCL5, WELLBEING];
+export const INSTRUMENT_LIST = [GAD7, PHQ9, SLEEP, STRESS, PCL5, WELLBEING, SELFESTEEM];
 export const FREE_INSTRUMENT_LIST = INSTRUMENT_LIST.filter((instrument) => !instrument.paid);
 export const PAID_INSTRUMENT_LIST = INSTRUMENT_LIST.filter((instrument) => instrument.paid);
 

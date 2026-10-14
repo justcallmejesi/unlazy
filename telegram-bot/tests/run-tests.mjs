@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
 import {
-  GAD7, INSTRUMENT_LIST, PCL5, PHQ9, SLEEP, STRESS, WELLBEING, bandOf, buildResult, interpretResult,
+  GAD7, INSTRUMENT_LIST, PCL5, PHQ9, SLEEP, STRESS, WELLBEING, bandOf, buildResult, getInstrument, interpretResult,
   itemContribution, scoreAnswers, severityOf, riskFlagged,
 } from "../src/instruments.mjs";
 import {
@@ -365,6 +365,21 @@ test("instruments: the wellbeing scale is the bot's own, and on it a low score i
   assert.equal(good.severity, "добре самопочуття");
 });
 
+test("instruments: the self-esteem scale counts its critical items backwards", () => {
+  const scale = getInstrument("selfesteem");
+  assert.equal(scale.items.length, 8);
+  assert.equal(scale.paid, true);
+  assert.equal(scale.higherIsBetter, true);
+  assert.ok(scale.caveat, "the bot's own scale says what it is not");
+  const steady = buildResult(scale, [3, 0, 3, 0, 3, 0, 3, 0], WED_NOON_UTC);
+  assert.equal(steady.score, 24);
+  assert.equal(steady.aboveCutoff, false);
+  const shaky = buildResult(scale, [0, 3, 0, 3, 0, 3, 0, 3], WED_NOON_UTC);
+  assert.equal(shaky.score, 0);
+  assert.equal(shaky.aboveCutoff, true, "a low total is the worrying side");
+  assert.deepEqual(practicesFor("selfesteem").map((practice) => practice.id), ["critic", "selfkind"]);
+});
+
 test("router: a low wellbeing score offers the route to a person, like a high one elsewhere", () => {
   const h = harness({ config: { contact: { username: "helper_psy", name: "Олексій", role: "психолог" } } });
   h.say("/start");
@@ -405,7 +420,7 @@ test("selfhelp: every result carries a practices button, and it answers for that
   assert.deepEqual(scored.payload.reply_markup.inline_keyboard[0][0].callback_data, "p|gad7");
   const answer = h.tap("p|gad7");
   assert.match(lastText(answer), /Дихання 4-6/);
-  assert.match(lastText(answer), /Заземлення 5-4-3-2-1/);
+  assert.match(lastText(answer), /Час для тривоги/);
   // /selfhelp lists all of them, each one opens on its own.
   const menu = h.say("/selfhelp");
   const ids = menu[0].payload.reply_markup.inline_keyboard.flat().map((button) => button.callback_data);
@@ -804,6 +819,45 @@ function linkedHarness() {
   h.client.tap("cs|yes|" + code);
   return Object.assign(h, { code });
 }
+
+test("homework: a specialist gives a task, the client is notified, and done goes back", () => {
+  const h = linkedHarness();
+  const asked = h.psy.tap("hw|" + CLIENT);
+  assert.match(lastText(asked), /Домашнє завдання для/);
+  const sent = h.psy.say("Тричі за тиждень записати три добрі речі за день");
+  const toClient = sent.find((action) => action.payload.chat_id === CLIENT);
+  assert.match(toClient.payload.text, /Нове домашнє завдання/);
+  assert.match(toClient.payload.text, /три добрі речі/);
+  const done = toClient.payload.reply_markup.inline_keyboard[0][0].callback_data;
+  assert.match(done, /^hd\|[a-f0-9]{12}$/);
+  assert.equal(h.store.user(CLIENT).homework.length, 1);
+
+  // The client's own list, and the card the specialist sees.
+  assert.match(lastText(h.client.say("/homework")), /Відкриті/);
+  assert.match(h.psy.tap("cl|" + CLIENT).map((a) => a.payload.text || "").join("\n"), /⏳ Тричі за тиждень/);
+
+  const marked = h.client.tap(done);
+  assert.ok(marked.some((action) => action.payload.chat_id === PSY && /домашнє завдання виконано/.test(action.payload.text)));
+  assert.ok(h.store.user(CLIENT).homework[0].doneAt);
+  assert.equal(h.client.tap(done)[0].payload.text, "Вже позначено", "a second tap changes nothing");
+
+  // Without consent there is nothing to give, and a stale draft sends nothing.
+  h.psy.tap("hw|" + CLIENT);
+  h.client.tap("rv|" + PSY);
+  const refused = h.psy.say("Ще одне завдання");
+  assert.match(lastText(refused), /Не вдалося надіслати/);
+  assert.equal(h.store.user(CLIENT).homework.length, 1);
+  assert.match(lastText(h.psy.tap("hw|" + CLIENT)), /не надав згоди/);
+});
+
+test("homework: /cancel drops a draft, and only a specialist with access can start one", () => {
+  const h = linkedHarness();
+  h.psy.tap("hw|" + CLIENT);
+  assert.match(lastText(h.psy.say("/cancel")), /не надіслано/);
+  assert.match(lastText(h.psy.say("просто текст")), /.+/);
+  assert.equal(h.store.user(CLIENT).homework.length, 0);
+  assert.doesNotMatch(lastText(h.client.tap("hw|" + PSY)), /Домашнє завдання для/);
+});
 
 test("psy: the state follows approval, subscription and the owner's free access", () => {
   const at = WED_NOON_UTC;
@@ -2094,7 +2148,8 @@ test("paywall: /start opens a trial and says how long it lasts", () => {
   // The locked scales are marked in the keyboard, not hidden.
   const rows = started[0].payload.reply_markup.inline_keyboard;
   assert.deepEqual(rows[0].map((b) => b.callback_data), ["s|gad7", "s|phq9"]);
-  assert.deepEqual(rows[1].map((b) => b.callback_data), ["s|sleep", "s|stress", "s|pcl5", "s|wellbeing"]);
+  assert.deepEqual(rows[1].map((b) => b.callback_data), ["s|sleep", "s|stress", "s|pcl5"]);
+  assert.deepEqual(rows[2].map((b) => b.callback_data), ["s|wellbeing", "s|selfesteem"]);
   assert.doesNotMatch(rows[1][0].text, /🔒/, "nothing is locked during the trial");
 });
 

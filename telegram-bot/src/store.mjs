@@ -43,6 +43,8 @@ function defaultUser(chatId) {
     psy: null,
     // Consents this person gave to specialists, revoked ones kept as a record.
     shares: [],
+    // Homework from specialists, newest last.
+    homework: [],
   };
 }
 
@@ -100,6 +102,20 @@ function normalizeShare(raw) {
   };
 }
 
+// Homework a specialist gave this person. Kept while the consent it was given
+// under is in force; the text is the specialist's, bounded like a note.
+export const MAX_HOMEWORK_TEXT = 1000;
+export const MAX_HOMEWORK_PER_USER = 50;
+
+function normalizeHomework(raw) {
+  if (!raw || typeof raw !== "object" || !Number.isInteger(raw.psy)) return null;
+  if (typeof raw.id !== "string" || !/^[A-Za-z0-9]{4,16}$/.test(raw.id)) return null;
+  const text = boundedText(raw.text, MAX_HOMEWORK_TEXT);
+  const createdAt = isoOrNull(raw.createdAt);
+  if (!text || !createdAt) return null;
+  return { id: raw.id, psy: raw.psy, text, createdAt, doneAt: isoOrNull(raw.doneAt) };
+}
+
 // One check-in per local day: a rating from 1 to 10 and any known tags. An
 // entry that does not fit that shape is dropped rather than shown.
 function normalizeMood(raw) {
@@ -146,6 +162,9 @@ function normalizeUser(chatId, raw) {
     : [];
   user.psy = normalizePsy(raw.psy);
   user.shares = Array.isArray(raw.shares) ? raw.shares.map(normalizeShare).filter(Boolean) : [];
+  user.homework = Array.isArray(raw.homework)
+    ? raw.homework.map(normalizeHomework).filter(Boolean).slice(-MAX_HOMEWORK_PER_USER)
+    : [];
   return user;
 }
 
