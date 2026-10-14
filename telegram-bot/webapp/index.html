@@ -118,25 +118,30 @@ figcaption .swatch { margin-right: 2px; }
 .tile-value { font-size: 30px; font-weight: 650; letter-spacing: -.02em; margin-top: 2px; }
 .tile-sub { font-size: 13px; color: var(--ink-2); }
 
-.menu { display: grid; gap: 10px; }
+/* The home screen is tiles in sections, like the reply keyboard in the chat:
+   two per row, the wide ones across. */
+.menu { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.menu-section { font-size: 14px; font-weight: 600; color: var(--ink-2); margin: 18px 2px 8px; }
 .menu-item {
-  display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+  position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+  width: 100%; min-width: 0; text-align: left; min-height: 116px;
   background: var(--card); color: var(--ink); border: 1px solid var(--line);
-  border-radius: var(--radius); padding: 14px; font: inherit; cursor: pointer;
-  min-height: 60px;
+  border-radius: var(--radius); padding: 14px 12px 12px; font: inherit; cursor: pointer;
+  box-shadow: inset 0 3px 0 var(--scale-color, transparent);
 }
-.menu-item:active { background: var(--surface); }
-/* Inline SVG rather than symbol characters: the WebView font is whatever the
-   device ships, and half the geometric glyphs fall back to a box. */
-.menu-item .glyph { width: 26px; height: 26px; flex: none; color: var(--ink-3); }
-.menu-item .glyph.scale { color: var(--scale-color, var(--ink-3)); }
-.menu-item.locked .glyph { opacity: .55; }
-.menu-item .lock { font-size: 12px; color: var(--ink-3); }
-.menu-item .body { flex: 1; min-width: 0; }
-.menu-item .title { display: block; font-weight: 600; }
-.menu-item .hint { display: block; font-size: 13px; color: var(--ink-3); margin-top: 1px; }
-.menu-item .chev { color: var(--ink-3); flex: none; }
-.menu-item.access .glyph { color: var(--accent); }
+.menu-item:active { background: var(--surface); transform: scale(.98); }
+.menu-item .emoji { font-size: 28px; line-height: 1; }
+.menu-item.locked .emoji { opacity: .55; }
+.menu-item .lock { position: absolute; top: 10px; right: 10px; font-size: 13px; }
+.menu-item .body { min-width: 0; width: 100%; }
+.menu-item .title { display: block; font-weight: 600; overflow-wrap: anywhere; }
+.menu-item .hint { display: block; font-size: 12.5px; line-height: 1.35; color: var(--ink-3); margin-top: 2px; overflow-wrap: anywhere; }
+.menu-item .chev { display: none; }
+.menu-item.wide { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 12px; min-height: 64px; }
+.menu-item.wide .body { flex: 1; }
+.menu-item.wide .chev { display: block; color: var(--ink-3); flex: none; }
+.menu-item.access .title { color: var(--accent); }
+@media (max-width: 330px) { .menu { grid-template-columns: minmax(0, 1fr); } }
 .bullets { margin: 0; padding-left: 20px; }
 .bullets li { margin: 4px 0; }
 #stats-access { margin: 0 0 12px; }
@@ -170,10 +175,15 @@ textarea {
   width: 100%; min-height: 130px; resize: vertical; font: inherit; color: var(--ink);
   background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px;
 }
+/* WebView time pickers carry an intrinsic min-width wider than a phone card,
+   so the field is pinned to its box and its native chrome is dropped. */
 input[type="time"], select {
-  width: 100%; font: inherit; color: var(--ink); background: var(--card);
-  border: 1px solid var(--line); border-radius: 12px; padding: 12px; min-height: 48px;
+  display: block; width: 100%; max-width: 100%; min-width: 0; font: inherit; color: var(--ink);
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; min-height: 48px;
 }
+input[type="time"] { -webkit-appearance: none; appearance: none; text-align: left; line-height: 22px; }
+input[type="time"]::-webkit-date-and-time-value { text-align: left; }
+.card { min-width: 0; }
 label.field { display: block; font-size: 14px; color: var(--ink-2); margin: 12px 0 6px; }
 .counter { font-size: 13px; color: var(--ink-3); text-align: right; margin-top: 4px; }
 .switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; }
@@ -220,7 +230,6 @@ td .note { display: block; color: var(--ink-2); font-size: 13px; margin-top: 3px
 
 /* "Мені зараз погано" sits first and reads as help, not as an alarm. */
 .menu-item.sos { border-color: var(--danger); }
-.menu-item.sos .glyph { color: var(--danger); }
 .menu-item.sos .title { color: var(--danger); }
 .steps { margin: 6px 0 0; padding-left: 20px; }
 .steps li { margin: 0 0 6px; }
@@ -251,56 +260,68 @@ details.practice summary { font-weight: 600; cursor: pointer; }
   <h1>Самоспостереження</h1>
   <p class="muted">Короткі шкали про тривогу, настрій, сон, стрес і самопочуття. Результати зберігаються, раз на тиждень приходить нагадування.</p>
   <div class="menu" id="home-menu">
-    <button class="menu-item sos" data-go="sos">
-      <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg>
+    <button class="menu-item sos wide" data-go="sos">
+      <span class="emoji" aria-hidden="true">🆘</span>
       <span class="body"><span class="title">Мені зараз погано</span><span class="hint">Кілька кроків просто зараз і телефони допомоги</span></span>
       <span class="chev">›</span>
     </button>
-    <!-- Questionnaire cards are built from instruments.mjs by app.js and go here. -->
+  </div>
+  <div class="menu-section">📝 Тести</div>
+  <div class="menu">
+    <!-- Questionnaire tiles are built from instruments.mjs by app.js and go here. -->
     <div id="scale-anchor" hidden></div>
-    <button class="menu-item" id="mood-card" data-go="mood">
-      <svg class="glyph scale" style="--scale-color: var(--series-mood)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M9 14c.8 1 1.8 1.5 3 1.5s2.2-.5 3-1.5"/><path d="M9.5 10h0M14.5 10h0"/></svg>
+    <button class="menu-item wide" id="mood-card" data-go="mood" style="--scale-color: var(--series-mood)">
+      <span class="emoji" aria-hidden="true">🙂</span>
       <span class="body"><span class="title">Настрій сьогодні</span><span class="hint">Одна відмітка від 1 до 10</span></span>
       <span class="chev" id="mood-tail">›</span>
     </button>
-    <button class="menu-item access" id="access-card" data-go="access">
-      <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/></svg>
-      <span class="body"><span class="title">Повний доступ</span><span class="hint" id="access-hint">Що входить і оплата</span></span>
-      <span class="chev">›</span>
-    </button>
-    <button class="menu-item" data-go="practices">
-      <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 12c2-4 4-4 6 0s4 4 6 0 3-3 4-1"/></svg>
-      <span class="body"><span class="title">Техніки самодопомоги</span><span class="hint">Дихання, заземлення, сон, маленькі кроки</span></span>
-      <span class="chev">›</span>
-    </button>
+  </div>
+  <div class="menu-section">📈 Результати</div>
+  <div class="menu">
     <button class="menu-item" data-go="stats">
-      <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V5"/><path d="M4 19h16"/><path d="m7 14 4-5 3 3 4-6"/></svg>
+      <span class="emoji" aria-hidden="true">📊</span>
       <span class="body"><span class="title">Статистика</span><span class="hint">Динаміка балів за тижнями</span></span>
       <span class="chev">›</span>
     </button>
     <button class="menu-item" data-go="history">
-      <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
+      <span class="emoji" aria-hidden="true">🕘</span>
       <span class="body"><span class="title">Історія</span><span class="hint">Усі проходження з описами</span></span>
       <span class="chev">›</span>
     </button>
-    <button class="menu-item" data-go="report">
-      <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 13h6M9 17h6"/></svg>
+    <button class="menu-item wide" data-go="report">
+      <span class="emoji" aria-hidden="true">📄</span>
       <span class="body"><span class="title">Звіт для фахівця</span><span class="hint">Бали і графіки однією сторінкою</span></span>
       <span class="chev">›</span>
     </button>
-    <button class="menu-item" data-go="booking" id="booking-card" hidden>
-      <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/></svg>
-      <span class="body"><span class="title">Записатися на консультацію</span><span class="hint">Готове повідомлення фахівцю</span></span>
+  </div>
+  <div class="menu-section">🌿 Підтримка</div>
+  <div class="menu">
+    <button class="menu-item" data-go="practices" id="practices-card">
+      <span class="emoji" aria-hidden="true">🧘</span>
+      <span class="body"><span class="title">Техніки самодопомоги</span><span class="hint">Дихання, заземлення, сон</span></span>
       <span class="chev">›</span>
     </button>
+    <button class="menu-item" data-go="booking" id="booking-card" hidden>
+      <span class="emoji" aria-hidden="true">🗓</span>
+      <span class="body"><span class="title">Консультація</span><span class="hint">Готове повідомлення фахівцю</span></span>
+      <span class="chev">›</span>
+    </button>
+  </div>
+  <div class="menu-section">⚙️ Налаштування</div>
+  <div class="menu" id="settings-menu">
     <button class="menu-item" data-go="reminders">
-      <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 2"/></svg>
-      <span class="body"><span class="title">Нагадування</span><span class="hint">День, час і часовий пояс</span></span>
+      <span class="emoji" aria-hidden="true">⏰</span>
+      <span class="body"><span class="title">Нагадування</span><span class="hint">Час і часовий пояс</span></span>
       <span class="chev">›</span>
     </button>
     <button class="menu-item" data-go="data">
-      <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>
+      <span class="emoji" aria-hidden="true">📦</span>
       <span class="body"><span class="title">Мої дані</span><span class="hint">Вивантажити, імпортувати, видалити</span></span>
+      <span class="chev">›</span>
+    </button>
+    <button class="menu-item access wide" id="access-card" data-go="access">
+      <span class="emoji" aria-hidden="true">⭐</span>
+      <span class="body"><span class="title">Повний доступ</span><span class="hint" id="access-hint">Що входить і оплата</span></span>
       <span class="chev">›</span>
     </button>
   </div>

@@ -261,8 +261,8 @@ function show(name) {
 
 // ----------------------------------------------------------------- home
 
-const SCALE_ICON = '<svg class="glyph scale" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
-  'stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="8"/></svg>';
+// The same emoji as the reply keyboard in the chat.
+const SCALE_ICON = '<span class="emoji" aria-hidden="true">📝</span>';
 
 function minutesFor(instrument) {
   const count = instrument.items.length;
@@ -272,11 +272,11 @@ function minutesFor(instrument) {
 }
 
 function renderHome() {
-  const menu = $("home-menu");
-  Array.prototype.slice.call(menu.querySelectorAll("[data-instrument]")).forEach((node) => node.remove());
-  // Inserted before the anchor in declared order: under "Мені зараз погано",
-  // above the fixed cards.
+  Array.prototype.slice.call(document.querySelectorAll("#home [data-instrument]")).forEach((node) => node.remove());
+  // Inserted before the anchor in declared order: the first tiles of the
+  // "Тести" section, ahead of the mood check-in.
   const anchor = $("scale-anchor");
+  const menu = anchor.parentNode;
   INSTRUMENT_LIST.forEach((instrument) => {
     const locked = Boolean(instrument.paid) && !state.unlocked;
     const button = document.createElement("button");
@@ -289,10 +289,10 @@ function renderHome() {
     body.className = "body";
     const title = document.createElement("span");
     title.className = "title";
-    title.textContent = instrument.title + " · " + instrument.subtitle;
+    title.textContent = instrument.title;
     const hint = document.createElement("span");
     hint.className = "hint";
-    hint.textContent = instrument.items.length + " питань, " + minutesFor(instrument);
+    hint.textContent = instrument.subtitle + " · " + instrument.items.length + " питань, " + minutesFor(instrument);
     body.appendChild(title);
     body.appendChild(hint);
     const tail = document.createElement("span");
@@ -314,6 +314,8 @@ function renderHome() {
   $("mood-tail").className = state.unlocked ? "chev" : "lock";
   $("mood-tail").textContent = state.unlocked ? "›" : "🔒";
   $("booking-card").hidden = !CONTACT;
+  // Alone in its section, the practices tile spans the row instead of half of it.
+  $("practices-card").classList.toggle("wide", !CONTACT);
   $("access-hint").textContent = accessHint();
 }
 
