@@ -32,6 +32,10 @@ const HAIRS = [
 const FITS = [["Фіолетове", "#6A2BD9"], ["Кислотно-зелене", "#7BD82E"], ["Помаранчеве", "#FF6A1F"], ["Чорне", "#24202E"], ["Кобальт", "#2A55E0"]];
 const PETS = [["Маленький дракон", "dragon"], ["Чорний кіт", "cat"], ["Міні-робот", "robot"], ["Нікого", "none"]];
 const FORMS = [["Він", "m"], ["Вона", "f"]];
+// One painted location per level, plus the care-mode nook. Generated with
+// gemini-3.1-flash-lite-image as backgrounds only: no people, no text.
+const SCENE_IMAGES = ["img/lvl0.jpg", "img/lvl1.jpg", "img/lvl2.jpg", "img/lvl3.jpg", "img/lvl4.jpg"];
+SCENE_IMAGES.care = "img/care.jpg";
 
 const TIERS = [
   { id: "light", name: "Легкий", xp: 5 },
@@ -375,9 +379,20 @@ export function mountCharacter(deps) {
       '<linearGradient id="gLed" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#FF4FA3"/><stop offset="0.5" stop-color="#2EE6D6"/><stop offset="1" stop-color="#FFC93C"/></linearGradient>' +
       "</defs>";
     const label = risk ? "Персонаж у затишному місці, загорнутий у плед, з какао." : "Рівень " + LEVELS[level].name + ": " + LEVELS[level].place + ".";
-    return '<svg viewBox="0 0 400 260" role="img" aria-label="' + label + '">' + defs + backdrop(level, risk) + auraLayer(level, risk) +
-      (risk ? "" : hotspots(level)) + companion(level) + '<g data-hot="hero" tabindex="0" role="button" aria-label="Персонаж">' + character(level, risk) + "</g>" +
-      (level === 4 && !risk ? crowd() : "") + "</svg>";
+    // The painted location sits over the drawn one, which stays as the
+    // fallback while the picture loads or if it never does. A dark wash at
+    // the bottom keeps the character readable on any picture.
+    const picture = risk ? SCENE_IMAGES.care : SCENE_IMAGES[level];
+    const painted = picture
+      ? '<image href="' + picture + '" x="0" y="0" width="400" height="260" preserveAspectRatio="xMidYMid slice"/>' +
+        '<rect width="400" height="260" fill="url(#gWash)"/>'
+      : "";
+    return '<svg viewBox="0 0 400 260" role="img" aria-label="' + label + '">' + defs +
+      '<linearGradient id="gWash" x1="0" y1="0" x2="0" y2="1"><stop offset="0.45" stop-color="#0D0918" stop-opacity="0"/><stop offset="1" stop-color="#0D0918" stop-opacity="0.55"/></linearGradient>' +
+      backdrop(level, risk) + painted + auraLayer(level, risk) +
+      (risk ? "" : hotspots(level)) + companion(level) + ellipse(200, 236, 46, 7, "#000000", ' opacity="0.35"') +
+      '<g data-hot="hero" tabindex="0" role="button" aria-label="Персонаж">' + character(level, risk) + "</g>" +
+      (level === 4 && !risk && !picture ? crowd() : "") + "</svg>";
   }
 
   // ---------------------------------------------------------------- what a tap opens
