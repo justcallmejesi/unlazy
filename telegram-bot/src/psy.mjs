@@ -16,7 +16,25 @@ import { randomBytes } from "node:crypto";
 export const PSY_PAYLOAD_PREFIX = "psy-v1";
 // The only period Telegram accepts for a Stars subscription: 30 days.
 export const SUBSCRIPTION_PERIOD_SECONDS = 2592000;
-export const CONSENT_VERSION = "2026-09-v1";
+// v2 (2026-10) adds the signal about a crisis message typed to the bot: the
+// fact only, never the text. Only a consent of this version or later lets the
+// signal through; an older one is updated with one tap in /privacy.
+export const CONSENT_VERSION = "2026-10-v2";
+export const CRISIS_SIGNAL_SINCE = "2026-10-v2";
+
+export function allowsCrisisSignal(share) {
+  return Boolean(share) && typeof share.version === "string" && share.version >= CRISIS_SIGNAL_SINCE;
+}
+
+// Moves an older consent to the current text, keeping its date and notes choice.
+export function updateShareVersion(store, clientChatId, psyChatId, nowMs) {
+  const share = activeShare(store.user(clientChatId), psyChatId);
+  if (!share) return null;
+  share.version = CONSENT_VERSION;
+  share.updatedAt = new Date(nowMs).toISOString();
+  store.touch();
+  return share;
+}
 export const TERMS_VERSION = "2026-09-v1";
 export const INVITE_PREFIX = "c_";
 export const MAX_APPLICATION_FIELD = 300;

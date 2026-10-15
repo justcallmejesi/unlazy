@@ -532,7 +532,7 @@ details.practice summary { font-weight: 600; cursor: pointer; }
   <h2 id="access-title">Повний доступ</h2>
   <div class="callout" id="access-reason" hidden></div>
   <p id="access-status" hidden></p>
-  <div class="card">
+  <div class="card" id="access-open-card">
     <h2 id="access-open-title">Що відкривається</h2>
     <ul class="bullets" id="access-open"></ul>
   </div>
@@ -570,7 +570,7 @@ details.practice summary { font-weight: 600; cursor: pointer; }
     <ul class="bullets">
       <li>Клієнти проходять опитувальники і відмічають настрій у цьому боті.</li>
       <li>За їхньою згодою Ви бачите бали, динаміку і звіт по кожному клієнту.</li>
-      <li>Сповіщення приходить, коли результат перетинає поріг або в PHQ-9 позначено питання про думки щодо смерті.</li>
+      <li>Сповіщення приходить, коли результат перетинає поріг або в PHQ-9 позначено питання про думки щодо смерті, а також коли клієнт пише боту кризове повідомлення: лише факт і час, без тексту.</li>
       <li>Клієнт сам вирішує, чи ділитися даними, і може відкликати згоду одним натисканням.</li>
     </ul>
     <p class="muted" id="psy-price">Кожного фахівця перевіряє власник бота. Після схвалення кабінет працює за щомісячною підпискою в зірках Telegram, її можна скасувати будь-коли.</p>
@@ -610,6 +610,7 @@ details.practice summary { font-weight: 600; cursor: pointer; }
   <div class="card">
     <h2>Згоди</h2>
     <p class="muted">Фахівець бачить Ваші результати лише за Вашою згодою. Переглянути її або відкликати одним натисканням можна в чаті командою <b>/privacy</b>.</p>
+    <p class="muted"><a href="privacy.html" target="_blank" rel="noopener">Політика конфіденційності</a>: що зберігається, хто це бачить і як видалити.</p>
   </div>
   <div class="card">
     <h2>Імпорт із чату</h2>

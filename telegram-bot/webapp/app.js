@@ -55,6 +55,9 @@ const BOT = /^[A-Za-z0-9_]{4,32}$/.test(PARAMS.get("b") || "") ? PARAMS.get("b")
 const PSY_KINDS = ["none", "pending", "rejected", "admin", "subscribed", "expired", "unsubscribed"];
 const PSY = PSY_KINDS.indexOf(PARAMS.get("psy")) === -1 ? null : PARAMS.get("psy");
 const PSY_PRICE = /^[1-9][0-9]{0,4}$/.test(PARAMS.get("pp") || "") ? Number(PARAMS.get("pp")) : null;
+// Set by the bot for someone who marked PHQ-9 item 9 or wrote a crisis phrase
+// in the last 30 days. The app also checks its own recent results.
+const RISK_HINT = PARAMS.get("r") === "1";
 
 // ----------------------------------------------------------------- platform
 
@@ -366,6 +369,7 @@ function renderHome() {
   // Alone in its section, the practices tile spans the row instead of half of it.
   $("practices-card").classList.toggle("wide", !CONTACT);
   $("access-hint").textContent = accessHint();
+  $("access-card").hidden = atRisk();
   $("psy-hint").textContent = psyHint();
 }
 
@@ -388,6 +392,11 @@ function fillList(list, lines) {
 
 // `reason` says which lock brought the person here, or is empty.
 function renderAccess(reason) {
+  if (atRisk()) {
+    renderAccessGentle();
+    return;
+  }
+  $("access-open-card").hidden = false;
   const bought = PLAN === "pro";
   $("access-title").textContent = OFFER_TITLE;
   $("access-reason").hidden = !reason;
@@ -412,6 +421,24 @@ function renderAccess(reason) {
   $("access-note").textContent = bought
     ? "Питання щодо оплати: /paysupport у чаті."
     : "Вікно закриється, а рахунок прийде в чат. Повернення протягом 14 днів: /paysupport у чаті.";
+}
+
+// For someone at risk: no price, no pay button, only what stays free.
+function renderAccessGentle() {
+  $("access-title").textContent = "Ця частина зараз закрита";
+  $("access-reason").hidden = true;
+  $("access-status").hidden = false;
+  $("access-status").textContent = "Усе, що допомагає зараз, відкрито і безкоштовне назавжди.";
+  $("access-open-card").hidden = true;
+  $("access-price").hidden = true;
+  $("access-pay").hidden = true;
+  $("access-note").textContent = "Якщо зараз важко, натисніть «Мені зараз погано» на головному екрані.";
+  $("access-free-card").hidden = false;
+  fillList($("access-free"), freeLines());
+}
+
+function atRisk() {
+  return RISK_HINT || recentRisk(30);
 }
 
 function openAccess(reason) {
@@ -979,7 +1006,7 @@ async function renderStats() {
   renderTiles($("stats-tiles"), state.results, state.moods);
   const locked = $("stats-locked");
   locked.hidden = state.unlocked;
-  $("stats-access").hidden = state.unlocked;
+  $("stats-access").hidden = state.unlocked || atRisk();
   if (!state.unlocked) {
     locked.textContent = "Повна статистика, додаткові шкали і відмітка настрою входять у повний доступ.";
   }
@@ -1260,8 +1287,8 @@ $("data-delete").addEventListener("click", () => {
 });
 
 // A marked PHQ-9 item 9 in the last two weeks puts the character in care mode.
-function recentRisk() {
-  const since = Date.now() - 14 * 24 * 60 * 60 * 1000;
+function recentRisk(days = 14) {
+  const since = Date.now() - days * 24 * 60 * 60 * 1000;
   return state.results.some((entry) => entry.instrument === "phq9" && entry.risk && entry.at >= since);
 }
 
@@ -1284,5 +1311,9 @@ const character = mountCharacter({
 
 ready();
 renderHome();
-loadResults().then((results) => { state.results = results; });
+loadResults().then((results) => {
+  state.results = results;
+  // A marked item 9 found in the app's own results hides the offer too.
+  $("access-card").hidden = atRisk();
+});
 character.hint().then((text) => { $("char-hint").textContent = text; }).catch(() => { /* keeps the default hint */ });

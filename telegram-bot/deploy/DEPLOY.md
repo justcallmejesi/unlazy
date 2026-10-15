@@ -185,6 +185,22 @@ sudo systemctl start gad7-phq9-backup.service
 journalctl -u gad7-phq9-backup -n 20
 ```
 
+### Копія на домашній комп'ютер
+
+Сервер не може сам дістатися до домашнього комп'ютера, тому копію забирає комп'ютер. На Windows це робить `deploy/pull-backup.ps1`: через `scp` з ключем SSH (той самий, яким Ви заходите на сервер) він бере `/var/lib/gad7-phq9-bot/results.json`, перевіряє, що файл розбирається як знімок, кладе його як `results-РРРР-ММ-ДД.json` у `%USERPROFILE%\ModdTrackerBackups` і видаляє копії, старші за 60 днів. Тека доступна лише Вашому обліковому запису Windows, журнал у `backup.log` там само.
+
+Запуск щодня о 12:00 і при вході в систему, пропущений запуск наздоганяється:
+
+```text
+$script = "C:\шлях\до\unlazy\telegram-bot\deploy\pull-backup.ps1"
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$script`" -Server root@<адреса сервера>"
+$triggers = @((New-ScheduledTaskTrigger -Daily -At 12:00), (New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME))
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+Register-ScheduledTask -TaskName "ModdTracker backup" -Action $action -Trigger $triggers -Settings $settings -Force
+```
+
+Відновлення: скопіюйте потрібний файл на сервер у `/var/lib/gad7-phq9-bot/results.json` при зупиненому боті, власник `gad7bot`, права `0600`, і запустіть бота знову.
+
 ## Обслуговування
 
 | Задача | Команда |

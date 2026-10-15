@@ -36,6 +36,7 @@ import {
   INVITE_PREFIX, MAX_APPLICATION_FIELD, TERMS_VERSION, activeShare, applySubscriptionPayment,
   checkSubscriptionPreCheckout, clientsOf, findSpecialistByCode, grantShare, isSubscriptionPayload,
   newInviteCode, psyState, revokeShare, setShareNotes, subscriptionInvoice,
+  allowsCrisisSignal, updateShareVersion,
 } from "./psy.mjs";
 import {
   adminApplication, adminDecided, adminDecisionKeyboard, adminNoPending, adminStats, clientDisconnectedByPsy,
@@ -49,6 +50,7 @@ import {
   psySubscribeKeyboard, psyTerms, psyTermsKeyboard, revokeKeyboard, revoked,
   homeworkAsk, homeworkDoneForPsy, homeworkDoneKeyboard, homeworkForClient, homeworkList, homeworkListKeyboard,
   homeworkPickClient, homeworkPickKeyboard, homeworkSent,
+  consentOutdatedLine, consentUpdated, psyCrisisSignal,
 } from "./psytexts.mjs";
 import { MAX_HOMEWORK_PER_USER, MAX_HOMEWORK_TEXT } from "./store.mjs";
 import { randomBytes } from "node:crypto";
@@ -159,6 +161,8 @@ export function createRouter(context) {
     // stands. Hints again: every command checks for itself.
     if (config.botUsername) url += "&b=" + encodeURIComponent(config.botUsername);
     if (chatId !== undefined) url += "&psy=" + stateOf(chatId).kind + "&pp=" + Number(config.psy.stars);
+    // The window hides every offer from someone at risk, as the chat does.
+    if (chatId !== undefined && atRisk(chatId)) url += "&r=1";
     return url;
   }
 
@@ -702,6 +706,29 @@ export function createRouter(context) {
     return actions;
   }
 
+  // The privacy policy lives next to the Mini App, so it exists only when the
+  // app is hosted.
+  function policyLine() {
+    if (!config.webappUrl) return "";
+    const url = config.webappUrl.split("?")[0].replace(/[^/]*$/, "") + "privacy.html";
+    return "\n\nПолітика конфіденційності: " + escapeHtml(url);
+  }
+
+  // A crisis phrase: the fact and the time go to each specialist the person
+  // consented to under a version that names this signal, and only while the
+  // cabinet is active. Never the words. One signal an hour at most.
+  function crisisSignalActions(chatId) {
+    const client = store.user(chatId);
+    if (client.crisisSignalAt && now() - Date.parse(client.crisisSignalAt) < 60 * 60000) return [];
+    const targets = client.shares.filter((share) => !share.revokedAt && allowsCrisisSignal(share) && stateOf(share.psy).active);
+    if (!targets.length) return [];
+    store.updateUser(chatId, { crisisSignalAt: new Date(now()).toISOString() });
+    return targets.map((share) => send(share.psy, psyCrisisSignal(share.clientName,
+      formatLocalDateTime(now(), offsetAt(scheduleFor(share.psy), now()))), {
+      reply_markup: { inline_keyboard: [[{ text: "Картка клієнта", callback_data: "cl|" + chatId }]] },
+    }));
+  }
+
   // Alerts only while the specialist's cabinet is active; the client always
   // has the crisis block regardless.
   function alertActions(clientChatId, instrument, result) {
@@ -735,9 +762,13 @@ export function createRouter(context) {
     const user = store.hasUser(chatId) ? store.user(chatId) : null;
     const shares = user ? user.shares.filter((share) => !share.revokedAt) : [];
     const rows = shares.map((share) => psyName(share.psy) + ": з " + dateFor(chatId, Date.parse(share.grantedAt)) +
-      ", нотатки " + (share.notes ? "видно" : "приховані"));
-    const keyboard = privacyKeyboard(shares.map((share) => ({ psy: share.psy, name: psyName(share.psy), notes: share.notes })));
-    return [send(chatId, privacyMessage(rows), keyboard ? { reply_markup: keyboard } : {})];
+      ", нотатки " + (share.notes ? "видно" : "приховані") + (allowsCrisisSignal(share) ? "" : ", попередня версія згоди"));
+    const keyboard = privacyKeyboard(shares.map((share) => ({
+      psy: share.psy, name: psyName(share.psy), notes: share.notes, outdated: !allowsCrisisSignal(share),
+    })));
+    const outdated = shares.some((share) => !allowsCrisisSignal(share));
+    const text = privacyMessage(rows) + (outdated ? "\n\n" + consentOutdatedLine() : "") + policyLine();
+    return [send(chatId, text, keyboard ? { reply_markup: keyboard } : {})];
   }
 
   // Before /delete wipes a person: tell the specialists who saw their data,
@@ -1003,7 +1034,7 @@ export function createRouter(context) {
       case "help":
         return [send(chatId, helpText(), { reply_markup: startKeyboard(access(chatId).active) })];
       case "about":
-        return [send(chatId, aboutText(reminderLine(chatId)))];
+        return [send(chatId, aboutText(reminderLine(chatId)) + policyLine())];
       case "buy":
         return accessActions(chatId);
       case "paysupport": {
@@ -1282,7 +1313,7 @@ export function createRouter(context) {
     if (detectCrisis(text)) {
       store.updateUser(chatId, { crisisAt: new Date(now()).toISOString() });
       const rest = textActions(chatId, text, message, true);
-      return [sosBlock(chatId)].concat(rest);
+      return [sosBlock(chatId)].concat(rest, crisisSignalActions(chatId));
     }
     return textActions(chatId, text, message, false);
   }
@@ -1483,6 +1514,12 @@ export function createRouter(context) {
       // nor the keyboard that keeps "Мені зараз погано" in reach.
       const welcome = parts[0] === "cn" ? handleCommand(chatId, { command: "start", args: "" }, { from: query.from }) : [];
       return [ack(query.id), reply].concat(extra, welcome);
+    }
+    if (parts[0] === "cu") {
+      const psyChatId = Number(parts[1]);
+      const share = updateShareVersion(store, chatId, psyChatId, now());
+      if (!share) return [ack(query.id)];
+      return [ack(query.id, "Згоду оновлено"), send(chatId, consentUpdated(psyName(psyChatId)))];
     }
     if (parts[0] === "rv") {
       const psyChatId = Number(parts[1]);

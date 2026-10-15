@@ -48,6 +48,8 @@ function defaultUser(chatId) {
     // A crisis phrase typed as text, ISO time. Like a marked PHQ-9 item 9, it
     // keeps every unasked-for payment prompt away for a while.
     crisisAt: null,
+    // When specialists last heard of a crisis message, to send one an hour.
+    crisisSignalAt: null,
     // The daily mood reminder: offered once after the first result, opt-in.
     // `unanswered` counts reminders sent since the person last wrote; at two
     // the bot falls silent until they come back on their own.
@@ -139,6 +141,7 @@ function normalizeShare(raw) {
     clientName: boundedText(raw.clientName, 64),
     grantedAt,
     version: boundedText(raw.version, 32),
+    updatedAt: isoOrNull(raw.updatedAt),
     notes: raw.notes === true,
     revokedAt: isoOrNull(raw.revokedAt),
     revokedBy: raw.revokedBy === "psy" || raw.revokedBy === "client" ? raw.revokedBy : null,
@@ -209,6 +212,7 @@ function normalizeUser(chatId, raw) {
     ? raw.homework.map(normalizeHomework).filter(Boolean).slice(-MAX_HOMEWORK_PER_USER)
     : [];
   user.crisisAt = isoOrNull(raw.crisisAt);
+  user.crisisSignalAt = isoOrNull(raw.crisisSignalAt);
   user.dailyMood = normalizeDailyMood(raw.dailyMood);
   user.moodSummaryAt = isoOrNull(raw.moodSummaryAt);
   user.trialNoticeAt = isoOrNull(raw.trialNoticeAt);

@@ -73,8 +73,18 @@ Russian phrases on a normalized text get the same block as "Мені зараз
 погано", before a note, booking or application takes the text, which still
 lands. For 30 days after such a phrase or a marked PHQ-9 item 9 (`atRisk` in
 the router) the bot shows no unasked-for price, pay button or trial notice;
-`/buy` and "⭐ Повний доступ" still answer. Free text otherwise gets simple
-intents or the menu, never "Не зрозумів команду".
+`/buy` and "⭐ Повний доступ" still answer. The Mini App gets `r=1` in its
+URL and hides its offers too. Free text otherwise gets simple intents or the
+menu, never "Не зрозумів команду". A crisis phrase also signals each
+consented specialist: the fact and the time, never the words, once an hour,
+only under consent `2026-10-v2` or later (`allowsCrisisSignal`); an older
+consent is updated by the client in `/privacy`, never silently.
+
+The privacy policy is `telegram-bot/webapp/privacy.html`, linked from
+`/privacy`, `/about` and the app. Change it with any change to what is stored,
+who sees it or how long it is kept. The owner's PC pulls a daily copy of the
+snapshot (`deploy/pull-backup.ps1`, Task Scheduler "ModdTracker backup",
+`%USERPROFILE%\ModdTrackerBackups`, 60 days); the policy states these terms.
 
 Unasked messages besides the weekly reminder come from `habitActions` in the
 router: the one-time daily mood offer, the 20:00 daily mood question, the

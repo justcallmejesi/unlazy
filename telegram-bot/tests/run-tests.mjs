@@ -898,6 +898,17 @@ test("crisis: a typed phrase gets the SOS block with 103 and 7333 first and no p
   assert.doesNotMatch(textsOf(h.say("скільки коштує")).join("\n"), /Ціна/);
 });
 
+test("crisis: the window is told to hide its offers from someone at risk", () => {
+  const h = harness({ config: { webappUrl: "https://example.pages.dev/" } });
+  h.say("/start");
+  const urlOf = (actions) => actions.find((action) => action.method === "setChatMenuButton").payload.menu_button.web_app.url;
+  assert.doesNotMatch(urlOf(h.say("/menu")), /[?&]r=1/);
+  h.say("мені погано");
+  assert.match(urlOf(h.say("/menu")), /&r=1$/);
+  h.clock.now += 31 * DAY_MS;
+  assert.doesNotMatch(urlOf(h.say("/menu")), /[?&]r=1/, "the window closes after 30 days");
+});
+
 test("crisis: written as the weekly note, the note is kept and the help block still comes", () => {
   const h = harness();
   h.say("/start");
@@ -1051,6 +1062,31 @@ test("funnel: day counters for the owner, nothing per person, and /delete leaves
   h.client.say("/delete");
   h.client.tap("del|yes");
   assert.equal(h.store.hasUser(CLIENT), false);
+});
+
+test("crisis signal: the specialist hears the fact, never the words, under the new consent only", () => {
+  const h = linkedHarness();
+  const reply = h.client.say("я не хочу жити, все погано");
+  const toPsy = reply.filter((action) => action.payload.chat_id === PSY);
+  assert.equal(toPsy.length, 1);
+  assert.match(toPsy[0].payload.text, /кризове повідомлення/);
+  assert.doesNotMatch(toPsy[0].payload.text, /не хочу жити|погано/, "the words stay with the client");
+  assert.match(textsOf(reply)[0], /7333/, "the client gets help first");
+  assert.equal(h.client.say("мені погано").filter((action) => action.payload.chat_id === PSY).length, 0,
+    "one signal an hour");
+
+  // A consent given under the older text lets no signal through until updated.
+  h.store.user(CLIENT).shares[0].version = "2026-09-v1";
+  h.clock.now += 2 * 60 * 60000;
+  assert.equal(h.client.say("мені погано").filter((action) => action.payload.chat_id === PSY).length, 0);
+  const privacy = h.client.say("/privacy");
+  assert.match(lastText(privacy), /попередньою версією/);
+  const update = privacy[0].payload.reply_markup.inline_keyboard[0][0];
+  assert.equal(update.callback_data, "cu|" + PSY);
+  h.client.tap(update.callback_data);
+  assert.equal(h.store.user(CLIENT).shares[0].version, CONSENT_VERSION);
+  h.clock.now += 2 * 60 * 60000;
+  assert.equal(h.client.say("мені погано").filter((action) => action.payload.chat_id === PSY).length, 1);
 });
 
 test("psy: the state follows approval, subscription and the owner's free access", () => {
