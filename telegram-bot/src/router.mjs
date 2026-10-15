@@ -710,7 +710,7 @@ export function createRouter(context) {
   // app is hosted.
   function policyLine() {
     if (!config.webappUrl) return "";
-    const url = config.webappUrl.split("?")[0].replace(/[^/]*$/, "") + "privacy.html";
+    const url = config.webappUrl.split("?")[0].replace(/[^/]*$/, "") + "privacy";
     return "\n\nПолітика конфіденційності: " + escapeHtml(url);
   }
 
