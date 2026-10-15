@@ -464,6 +464,7 @@ const PSY_TILES = {
   clients: { emoji: "👥", title: "Мої клієнти", hint: "Бали, динаміка, картки", cmd: "clients" },
   invite: { emoji: "🔗", title: "Запросити клієнта", hint: "Посилання на згоду", cmd: "invite" },
   homework: { emoji: "📝", title: "Домашка клієнтам", hint: "Клієнт отримає сповіщення", cmd: "homework" },
+  sessions: { emoji: "🗓", title: "Записи і розклад", hint: "Хто записався, підготовка, бали", cmd: "sessions" },
   apply: { emoji: "📝", title: "Подати заявку", hint: "Ім'я, освіта, умови", cmd: "psy", wide: true },
   status: { emoji: "⏳", title: "Статус заявки", hint: "Відкрити в чаті", cmd: "psy", wide: true },
   subscribe: { emoji: "⭐", title: "Оформити підписку", hint: "", cmd: "psy", wide: true },
@@ -472,8 +473,8 @@ const PSY_TILES = {
 };
 
 function psyTileIds() {
-  if (PSY === "admin") return ["clients", "homework", "invite", "requests", "stats", "cabinet"];
-  if (PSY === "subscribed") return ["clients", "homework", "invite", "cabinet"];
+  if (PSY === "admin") return ["clients", "sessions", "homework", "invite", "requests", "stats", "cabinet"];
+  if (PSY === "subscribed") return ["clients", "sessions", "homework", "invite", "cabinet"];
   if (PSY === "pending" || PSY === "rejected") return ["status"];
   if (PSY === "expired" || PSY === "unsubscribed") return ["subscribe", "cabinet"];
   if (PSY === "none") return ["apply"];
@@ -1230,6 +1231,15 @@ $("rem-save").addEventListener("click", async () => {
 
 $("sos-contact").addEventListener("click", openContact);
 // The tasks live with the bot, so the tile opens them in the chat.
+// Features that live in the chat: the tile opens the command there.
+Array.prototype.forEach.call(document.querySelectorAll("[data-cmd]"), (node) => {
+  node.addEventListener("click", () => {
+    haptic("light");
+    const command = node.getAttribute("data-cmd");
+    if (!openBot(command)) window.alert("Відкрийте в чаті команду /" + command + ".");
+  });
+});
+
 $("homework-card").addEventListener("click", () => {
   haptic("light");
   if (!openBot("homework")) window.alert("Відкрийте в чаті команду /homework.");

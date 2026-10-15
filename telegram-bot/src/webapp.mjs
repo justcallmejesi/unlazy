@@ -59,9 +59,11 @@ export function parseWebAppPayload(raw) {
 //   r_<instrument>_<digits> a finished questionnaire, one digit per answer
 //   m_<rating>_<tag-tag>    the mood check-in, tags optional
 //   t_<0|1>_<HHMM>_<zone>   reminders, zone "a" for auto or minutes, "n" for minus
-//   psy, clients, invite, admin, stats, book, privacy, homework
+//   psy, clients, invite, admin, stats, book, privacy, homework, plan, diary,
+//   session, sessions, schedule, insights
 //                           a chat command the app has no screen for
-export const START_COMMANDS = ["psy", "clients", "invite", "admin", "stats", "book", "privacy", "homework"];
+export const START_COMMANDS = ["psy", "clients", "invite", "admin", "stats", "book", "privacy", "homework", "plan", "diary",
+  "session", "sessions", "schedule", "insights"];
 
 export function parseStartCode(code) {
   if (typeof code !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(code)) return null;

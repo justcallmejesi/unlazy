@@ -11,6 +11,9 @@ import {
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { MOOD_MAX, MOOD_MIN, moodTag } from "./selfhelp.mjs";
+import {
+  MAX_BOOKINGS_PER_USER, MAX_DIARY_ENTRIES, normalizeBooking, normalizeDiaryEntry, normalizePlan, normalizeSchedule,
+} from "./care.mjs";
 
 export const MAX_RESULTS_PER_USER = 200;
 export const MAX_NOTE_LENGTH = 1000;
@@ -50,6 +53,13 @@ function defaultUser(chatId) {
     crisisAt: null,
     // When specialists last heard of a crisis message, to send one an hour.
     crisisSignalAt: null,
+    // The person's own plan for a hard moment, see care.mjs.
+    safetyPlan: null,
+    // Thought diary entries, newest last.
+    diary: [],
+    // Sessions booked with a specialist. Kept with the client, so /delete
+    // removes them with everything else.
+    bookings: [],
     // The daily mood reminder: offered once after the first result, opt-in.
     // `unanswered` counts reminders sent since the person last wrote; at two
     // the bot falls silent until they come back on their own.
@@ -129,6 +139,7 @@ function normalizePsy(raw) {
     termsVersion: boundedText(raw.termsVersion, 32),
     inviteCode: typeof raw.inviteCode === "string" && /^[A-Za-z0-9]{8,32}$/.test(raw.inviteCode) ? raw.inviteCode : null,
     subscription,
+    schedule: normalizeSchedule(raw.schedule),
   };
 }
 
@@ -213,6 +224,9 @@ function normalizeUser(chatId, raw) {
     : [];
   user.crisisAt = isoOrNull(raw.crisisAt);
   user.crisisSignalAt = isoOrNull(raw.crisisSignalAt);
+  user.safetyPlan = normalizePlan(raw.safetyPlan);
+  user.diary = Array.isArray(raw.diary) ? raw.diary.map(normalizeDiaryEntry).filter(Boolean).slice(-MAX_DIARY_ENTRIES) : [];
+  user.bookings = Array.isArray(raw.bookings) ? raw.bookings.map(normalizeBooking).filter(Boolean).slice(-MAX_BOOKINGS_PER_USER) : [];
   user.dailyMood = normalizeDailyMood(raw.dailyMood);
   user.moodSummaryAt = isoOrNull(raw.moodSummaryAt);
   user.trialNoticeAt = isoOrNull(raw.trialNoticeAt);

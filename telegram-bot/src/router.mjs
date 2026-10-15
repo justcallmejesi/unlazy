@@ -57,6 +57,12 @@ import { randomBytes } from "node:crypto";
 import { parseStartCode, parseWebAppPayload } from "./webapp.mjs";
 import { detectCrisis, detectIntent } from "./crisis.mjs";
 import {
+  BOOKING_DAYS_AHEAD, DIARY_STEPS, MAX_BOOKINGS_PER_USER, MAX_CARE_TEXT, MAX_DIARY_ENTRIES, PLAN_STEPS, PREP_STEPS,
+  SESSION_MINUTES, bookingCard, bookingPsyKeyboard, dayLabel, diaryDone, diaryDoneKeyboard, diaryEntryText, diaryIntro,
+  diaryIntroKeyboard, diaryScaleKeyboard, freeSlots, insightsText, moodInsights, parseWeeklyTemplate, planIntro,
+  planMessage, planSaved, planStartKeyboard, planStepKeyboard, templateText,
+} from "./care.mjs";
+import {
   DAILY_MOOD_TIME, dailyMoodKeyboard, dailyMoodOffer, dailyMoodOfferKeyboard, dailyMoodQuestion, dailyMoodSet,
   friendlyUnknown, lockedGentle, moodWeekSummary, shortGreeting, startCtaKeyboard, trialEnding,
   trialEndingKeyboard,
@@ -193,7 +199,7 @@ export function createRouter(context) {
   function sosActions(chatId) {
     sessions.clearNote(chatId);
     sessions.clearBooking(chatId);
-    return [sosBlock(chatId)];
+    return [sosBlock(chatId)].concat(planActions(chatId));
   }
 
   // The same help block without closing what the bot was waiting for: a
@@ -313,7 +319,7 @@ export function createRouter(context) {
         actions.push(send(chatId, trialEnding(), { reply_markup: trialEndingKeyboard() }));
       }
     });
-    return actions;
+    return actions.concat(sessionHabits());
   }
 
   function practicesActions(chatId, key) {
@@ -624,6 +630,486 @@ export function createRouter(context) {
     }];
   }
 
+  // ---------------------------------------------------------- care: plan, diary, insights, sessions
+
+  // A step-by-step conversation the bot is in with someone: the safety plan,
+  // a diary entry, a session topic, the session prep, a specialist's weekly
+  // template. In memory on purpose, like a homework draft: a restart only
+  // means starting the step again. Thirty minutes of silence ends it.
+  const flows = new Map();
+  const FLOW_IDLE_MS = 30 * 60 * 1000;
+  const newId = () => randomBytes(6).toString("hex");
+
+  function flowOf(chatId) {
+    const flow = flows.get(Number(chatId));
+    if (!flow) return null;
+    if (now() - flow.at > FLOW_IDLE_MS) {
+      flows.delete(Number(chatId));
+      return null;
+    }
+    return flow;
+  }
+
+  function setFlow(chatId, flow) {
+    flows.set(Number(chatId), Object.assign(flow, { at: now() }));
+  }
+
+  // The safety plan follows the help block, never stands in for it.
+  function planActions(chatId) {
+    const user = store.hasUser(chatId) ? store.user(chatId) : null;
+    if (!user || !user.safetyPlan) return [];
+    return [send(chatId, planMessage(user.safetyPlan, null))];
+  }
+
+  function planCommand(chatId) {
+    const user = store.user(chatId);
+    if (user.safetyPlan) {
+      return [send(chatId, planMessage(user.safetyPlan, null), { reply_markup: planStartKeyboard(true) })];
+    }
+    return [send(chatId, planIntro(), { reply_markup: planStartKeyboard(false) })];
+  }
+
+  function planAsk(chatId, step) {
+    return send(chatId, PLAN_STEPS[step].ask, { reply_markup: planStepKeyboard() });
+  }
+
+  function planStep(chatId, flow, text) {
+    const step = PLAN_STEPS[flow.step];
+    if (text) flow.data[step.key] = text.trim().slice(0, MAX_CARE_TEXT);
+    flow.step += 1;
+    if (flow.step < PLAN_STEPS.length) {
+      setFlow(chatId, flow);
+      return [planAsk(chatId, flow.step)];
+    }
+    flows.delete(Number(chatId));
+    const plan = Object.assign({}, flow.data, { updatedAt: new Date(now()).toISOString() });
+    store.updateUser(chatId, { safetyPlan: Object.keys(flow.data).length ? plan : null });
+    const saved = store.user(chatId).safetyPlan;
+    return saved ? [send(chatId, planSaved()), send(chatId, planMessage(saved, null))] : [send(chatId, "План порожній, тому не збережений. Скласти знову: /plan")];
+  }
+
+  function diaryAsk(chatId, step) {
+    const definition = DIARY_STEPS[step];
+    return send(chatId, definition.ask, definition.scale ? { reply_markup: diaryScaleKeyboard(definition.key) } : {});
+  }
+
+  function diaryStep(chatId, flow, value) {
+    const step = DIARY_STEPS[flow.step];
+    flow.data[step.key] = step.scale ? value : String(value).trim().slice(0, MAX_CARE_TEXT);
+    flow.step += 1;
+    if (flow.step < DIARY_STEPS.length) {
+      setFlow(chatId, flow);
+      return [diaryAsk(chatId, flow.step)];
+    }
+    flows.delete(Number(chatId));
+    const entry = Object.assign({ id: newId(), at: new Date(now()).toISOString(), sentTo: [] }, flow.data);
+    const user = store.user(chatId);
+    store.updateUser(chatId, { diary: user.diary.concat([entry]).slice(-MAX_DIARY_ENTRIES) });
+    return [send(chatId, diaryEntryText(entry, dateFor(chatId, now()))),
+      send(chatId, diaryDone(entry), { reply_markup: diaryDoneKeyboard(entry, consentedSpecialists(chatId)) })];
+  }
+
+  // Specialists who may receive something from this person right now.
+  function consentedSpecialists(chatId) {
+    const user = store.hasUser(chatId) ? store.user(chatId) : null;
+    if (!user) return [];
+    return user.shares.filter((share) => !share.revokedAt && stateOf(share.psy).active)
+      .map((share) => ({ chatId: share.psy, name: psyName(share.psy) }));
+  }
+
+  function insightsActions(chatId) {
+    startTrialFor(chatId);
+    const state = access(chatId);
+    if (!state.active) return locked(chatId, state);
+    return [send(chatId, insightsText(moodInsights(store.moods(chatId))))];
+  }
+
+  // ---- sessions
+
+  function psyOffset(psyChatId) {
+    const schedule = scheduleFor(psyChatId);
+    return (ms) => offsetAt(schedule, ms);
+  }
+
+  function whenFor(psyChatId, at) {
+    const local = formatLocalDateTime(at, offsetAt(scheduleFor(psyChatId), at));
+    const dateKey = localDateKey(scheduleFor(psyChatId), at);
+    return dayLabel(dateKey) + " о " + local.split(" ")[1];
+  }
+
+  // Every live booking with a specialist, across their clients.
+  function bookingsOf(psyChatId) {
+    const found = [];
+    store.allUsers().forEach((user) => {
+      user.bookings.forEach((booking) => {
+        if (booking.psy === Number(psyChatId) && booking.status !== "canceled") found.push({ client: user, booking });
+      });
+    });
+    return found.sort((left, right) => left.booking.at - right.booking.at);
+  }
+
+  function slotsFor(psyChatId) {
+    const psyUser = store.hasUser(psyChatId) ? store.user(psyChatId) : null;
+    if (!psyUser || !psyUser.psy || !psyUser.psy.schedule || !stateOf(psyChatId).active) return [];
+    const taken = bookingsOf(psyChatId).map((entry) => entry.booking.at);
+    return freeSlots(psyUser.psy.schedule, localDateKey(scheduleFor(psyChatId), now()), now(), psyOffset(psyChatId), taken);
+  }
+
+  function bookableSpecialists(chatId) {
+    return consentedSpecialists(chatId).filter((specialist) => slotsFor(specialist.chatId).length);
+  }
+
+  function upcomingOf(chatId) {
+    const user = store.hasUser(chatId) ? store.user(chatId) : null;
+    return user ? user.bookings.filter((booking) => booking.status !== "canceled" && booking.at > now()) : [];
+  }
+
+  function sessionCommand(chatId) {
+    const upcoming = upcomingOf(chatId);
+    const lines = upcoming.map((booking) => "• " + escapeHtml(psyName(booking.psy)) + ", " + escapeHtml(whenFor(booking.psy, booking.at)) +
+      " (" + (booking.status === "confirmed" ? "підтверджено" : "чекає підтвердження") + ")");
+    const cancelRows = upcoming.map((booking) => [{ text: "Скасувати: " + whenFor(booking.psy, booking.at), callback_data: "sc|" + booking.id }]);
+    const specialists = bookableSpecialists(chatId);
+    const head = ["🗓 <b>Запис до фахівця</b>", ""];
+    if (lines.length) head.push("<b>Ваші записи</b>", ...lines, "");
+    if (!specialists.length) {
+      head.push(consentedSpecialists(chatId).length
+        ? "У Вашого фахівця зараз немає вільних вікон у розкладі. Можна написати йому напряму: /contact."
+        : "Записатися тут можна до фахівця, якому Ви надали згоду за його посиланням. Без цього: /book готує повідомлення психологу.");
+      return [send(chatId, head.join("\n"), cancelRows.length ? { reply_markup: { inline_keyboard: cancelRows } } : {})];
+    }
+    if (specialists.length > 1) {
+      head.push("До кого записатися?");
+      const rows = specialists.map((specialist) => [{ text: specialist.name, callback_data: "sb|" + specialist.chatId }]);
+      return [send(chatId, head.join("\n"), { reply_markup: { inline_keyboard: rows.concat(cancelRows) } })];
+    }
+    return [send(chatId, head.join("\n") + "Оберіть день:", { reply_markup: { inline_keyboard: dayRows(specialists[0].chatId).concat(cancelRows) } })];
+  }
+
+  function dayRows(psyChatId) {
+    const days = Array.from(new Set(slotsFor(psyChatId).map((slot) => slot.date)));
+    const buttons = days.map((date) => ({ text: dayLabel(date), callback_data: "sd|" + psyChatId + "|" + date.replace(/-/g, "") }));
+    const rows = [];
+    for (let index = 0; index < buttons.length; index += 3) rows.push(buttons.slice(index, index + 3));
+    return rows;
+  }
+
+  function timeRows(psyChatId, compactDate) {
+    const date = compactDate.slice(0, 4) + "-" + compactDate.slice(4, 6) + "-" + compactDate.slice(6, 8);
+    const buttons = slotsFor(psyChatId).filter((slot) => slot.date === date)
+      .map((slot) => ({ text: slot.time, callback_data: "st|" + psyChatId + "|" + slot.at }));
+    const rows = [];
+    for (let index = 0; index < buttons.length; index += 4) rows.push(buttons.slice(index, index + 4));
+    return rows;
+  }
+
+  function mayBook(chatId, psyChatId) {
+    return consentedSpecialists(chatId).some((specialist) => specialist.chatId === Number(psyChatId));
+  }
+
+  // The client chose a time: ask what they would like to talk about.
+  function chooseTime(chatId, psyChatId, at) {
+    if (!mayBook(chatId, psyChatId)) return [send(chatId, "Записатися можна лише до фахівця, якому Ви надали згоду.")];
+    if (!slotsFor(psyChatId).some((slot) => slot.at === at)) return [send(chatId, "Цей час уже зайнятий або минув. Оберіть інший: /session")];
+    sessions.clearAll(chatId);
+    setFlow(chatId, { kind: "topic", psy: Number(psyChatId), atMs: at, data: {} });
+    return [send(chatId, "🗓 " + escapeHtml(psyName(psyChatId)) + ", " + escapeHtml(whenFor(psyChatId, at)) + ".\n\n" +
+      "Про що хотілося б поговорити? Кілька слів, щоб фахівець міг підготуватися. Це побачить лише " + escapeHtml(psyName(psyChatId)) + ".",
+    { reply_markup: { inline_keyboard: [[{ text: "Пропустити", callback_data: "bk|skip" }]] } })];
+  }
+
+  function createBooking(chatId, flow, topic) {
+    flows.delete(Number(chatId));
+    if (!mayBook(chatId, flow.psy) || !slotsFor(flow.psy).some((slot) => slot.at === flow.atMs)) {
+      return [send(chatId, "Цей час уже зайнятий. Оберіть інший: /session")];
+    }
+    const booking = {
+      id: newId(), psy: flow.psy, at: flow.atMs, status: "pending", topic: (topic || "").trim().slice(0, MAX_CARE_TEXT),
+      createdAt: new Date(now()).toISOString(), canceledBy: null, prep: null, prepAskedAt: null, summarySentAt: null,
+    };
+    const user = store.user(chatId);
+    store.updateUser(chatId, { bookings: user.bookings.concat([booking]).slice(-MAX_BOOKINGS_PER_USER) });
+    return [
+      send(chatId, "Запит надіслано: " + escapeHtml(psyName(flow.psy)) + ", " + escapeHtml(whenFor(flow.psy, booking.at)) +
+        ". Коли фахівець підтвердить, я напишу. За день до зустрічі запропоную коротку підготовку.",
+      { reply_markup: { inline_keyboard: [[{ text: "Скасувати запис", callback_data: "sc|" + booking.id }]] } }),
+      sessionCardAction(flow.psy, user, booking, "Новий запис"),
+    ];
+  }
+
+  function sessionCardAction(psyChatId, client, booking, title, prepMissing) {
+    const share = activeShare(client, psyChatId);
+    const scoreLines = share ? sessionScoreLines(client.chatId, psyChatId) : null;
+    return send(psyChatId, bookingCard(booking, {
+      title, clientName: share ? share.clientName : "Клієнт", when: whenFor(psyChatId, booking.at), scoreLines, prepMissing,
+    }), { reply_markup: bookingPsyKeyboard(client.chatId, booking) });
+  }
+
+  function sessionScoreLines(clientChatId, psyChatId) {
+    const lines = INSTRUMENT_LIST.map((instrument) => scaleLine(clientChatId, instrument)).filter(Boolean);
+    const mood = weekAverage(clientChatId);
+    if (mood !== null) lines.push("Настрій за 7 днів: " + mood.toFixed(1).replace(".", ","));
+    const tasks = store.user(clientChatId).homework.filter((entry) => entry.psy === Number(psyChatId));
+    if (tasks.length) lines.push("Домашні завдання: виконано " + tasks.filter((entry) => entry.doneAt).length + " з " + tasks.length);
+    if (flagged(clientChatId)) lines.push("⚠️ За 30 днів був результат вище порогу або позначене питання 9 PHQ-9");
+    if (!lines.length) lines.push("Ще немає результатів.");
+    return lines;
+  }
+
+  function findBooking(clientChatId, id) {
+    const client = store.hasUser(clientChatId) ? store.user(clientChatId) : null;
+    const booking = client ? client.bookings.find((entry) => entry.id === id) : null;
+    return booking ? { client, booking } : null;
+  }
+
+  function cancelBooking(found, by) {
+    found.booking.status = "canceled";
+    found.booking.canceledBy = by;
+    store.touch();
+    const when = whenFor(found.booking.psy, found.booking.at);
+    const share = activeShare(found.client, found.booking.psy);
+    const name = share ? share.clientName : "Клієнт";
+    return by === "client"
+      ? [send(found.client.chatId, "Запис скасовано: " + escapeHtml(when) + "."),
+        send(found.booking.psy, "Запис скасовано клієнтом: " + escapeHtml(name || "Клієнт") + ", " + escapeHtml(when) + ".")]
+      : [send(found.client.chatId, escapeHtml(psyName(found.booking.psy)) + " скасовує запис на " + escapeHtml(when) +
+        ". Обрати інший час: /session"),
+      send(found.booking.psy, "Запис скасовано: " + escapeHtml(name || "Клієнт") + ", " + escapeHtml(when) + ".")];
+  }
+
+  // Upcoming sessions between a client and a specialist, when the consent
+  // between them ends: cancelled, both told once.
+  function cancelBetween(clientChatId, psyChatId) {
+    const client = store.hasUser(clientChatId) ? store.user(clientChatId) : null;
+    if (!client) return [];
+    const upcoming = client.bookings.filter((booking) => booking.psy === Number(psyChatId) && booking.status !== "canceled" && booking.at > now());
+    if (!upcoming.length) return [];
+    upcoming.forEach((booking) => { booking.status = "canceled"; booking.canceledBy = "consent"; });
+    store.touch();
+    return [send(clientChatId, "Записи до " + escapeHtml(psyName(psyChatId)) + " скасовано, бо згоду закрито."),
+      send(psyChatId, "Записи клієнта скасовано: згоду закрито (" + upcoming.length + ").")];
+  }
+
+  function sessionsForPsy(chatId) {
+    const denied = requireActive(chatId);
+    if (denied) return denied;
+    const user = store.user(chatId);
+    const upcoming = bookingsOf(chatId).filter((entry) => entry.booking.at > now());
+    const lines = ["🗓 <b>Записи і розклад</b>", "", "Розклад: " + escapeHtml(templateText(user.psy.schedule)) + "."];
+    if (!upcoming.length) lines.push("", "Майбутніх записів немає.");
+    else {
+      lines.push("", "<b>Майбутні</b>");
+      upcoming.forEach((entry) => {
+        const share = activeShare(entry.client, chatId);
+        lines.push("• " + escapeHtml(whenFor(chatId, entry.booking.at)) + ", " + escapeHtml(share ? share.clientName || "Клієнт" : "Клієнт") +
+          (entry.booking.status === "pending" ? ", чекає підтвердження" : ""));
+      });
+    }
+    lines.push("", "Клієнти зі згодою записуються самі: /session у них у чаті. За день до зустрічі бот попросить їх про коротку підготовку, а Вам надішле зведення.");
+    const rows = upcoming.slice(0, 20).map((entry) => [{
+      text: whenFor(chatId, entry.booking.at) + ": " + ((activeShare(entry.client, chatId) || {}).clientName || "Клієнт"),
+      callback_data: "bv|" + entry.client.chatId + "|" + entry.booking.id,
+    }]);
+    rows.push([{ text: "✏️ Змінити розклад", callback_data: "ss|edit" }]);
+    return [send(chatId, lines.join("\n"), { reply_markup: { inline_keyboard: rows } })];
+  }
+
+  function scheduleAsk(chatId) {
+    const denied = requireActive(chatId);
+    if (denied) return denied;
+    setFlow(chatId, { kind: "schedule", data: {} });
+    return [send(chatId, "Напишіть тижневий розклад одним повідомленням: день і години, дні через крапку з комою.\n\n" +
+      "Наприклад: <code>Пн 18:00, 19:00; Ср 10:00, 11:00; Сб 12:00</code>\n\n" +
+      "Зустріч триває " + SESSION_MINUTES + " хвилин, клієнти бачать вільні вікна на " + BOOKING_DAYS_AHEAD +
+      " днів уперед. Прибрати розклад: напишіть <code>очистити</code>. Передумали: /cancel")];
+  }
+
+  function scheduleSave(chatId, text) {
+    const user = store.user(chatId);
+    if (/^(очистити|очистить|clear)$/i.test(text.trim())) {
+      flows.delete(Number(chatId));
+      store.updateUser(chatId, { psy: Object.assign({}, user.psy, { schedule: null }) });
+      return [send(chatId, "Розклад прибрано. Нові записи неможливі, наявні залишаються.")];
+    }
+    const slots = parseWeeklyTemplate(text);
+    if (!slots) return [send(chatId, "Не вдалося прочитати розклад. Приклад: <code>Пн 18:00, 19:00; Ср 10:00</code>")];
+    flows.delete(Number(chatId));
+    store.updateUser(chatId, { psy: Object.assign({}, user.psy, { schedule: { slots } }) });
+    return [send(chatId, "Розклад збережено: " + escapeHtml(templateText({ slots })) + ".\nВільних вікон на " + BOOKING_DAYS_AHEAD +
+      " днів: " + slotsFor(chatId).length + ". Записи: /sessions")];
+  }
+
+  function prepAsk(chatId, step) {
+    return send(chatId, PREP_STEPS[step].ask, { reply_markup: { inline_keyboard: [[{ text: "Пропустити", callback_data: "pr|skip" }]] } });
+  }
+
+  function prepStep(chatId, flow, text) {
+    if (text) flow.data[PREP_STEPS[flow.step].key] = text.trim().slice(0, MAX_CARE_TEXT);
+    flow.step += 1;
+    if (flow.step < PREP_STEPS.length) {
+      setFlow(chatId, flow);
+      return [prepAsk(chatId, flow.step)];
+    }
+    flows.delete(Number(chatId));
+    const found = findBooking(chatId, flow.booking);
+    if (!found || found.booking.status === "canceled") return [send(chatId, "Цей запис уже скасовано.")];
+    found.booking.prep = { changed: flow.data.changed || "", hard: flow.data.hard || "", talk: flow.data.talk || "" };
+    found.booking.summarySentAt = new Date(now()).toISOString();
+    store.touch();
+    return [send(chatId, "Дякую, відповіді надіслано фахівцю. До зустрічі!"),
+      sessionCardAction(found.booking.psy, found.client, found.booking, "Підготовка до сесії")];
+  }
+
+  // Unasked messages about sessions: the prep the day before (daytime), and
+  // the summary two hours before when the prep was not filled in. A booked
+  // session is the person's own appointment, so these go out even when the
+  // daily reminders have fallen silent.
+  function sessionHabits() {
+    const actions = [];
+    store.allUsers().forEach((user) => {
+      user.bookings.forEach((booking) => {
+        if (booking.status === "canceled" || booking.at <= now()) return;
+        const left = booking.at - now();
+        const share = activeShare(user, booking.psy);
+        if (!share || !stateOf(booking.psy).active) return;
+        const minutes = localMinutes(scheduleFor(user.chatId), now());
+        if (!booking.prepAskedAt && left <= 30 * 3600000 && left > 3 * 3600000 && minutes >= 10 * 60 && minutes < 21 * 60) {
+          booking.prepAskedAt = new Date(now()).toISOString();
+          store.touch();
+          actions.push(send(user.chatId, "🗓 Скоро сесія: " + escapeHtml(psyName(booking.psy)) + ", " + escapeHtml(whenFor(booking.psy, booking.at)) +
+            ".\n\nЩоб зустріч була кориснішою, дайте відповідь на 3 короткі питання. Відповіді побачить лише " +
+            escapeHtml(psyName(booking.psy)) + ".", { reply_markup: { inline_keyboard: [[
+            { text: "Відповісти", callback_data: "pr|go|" + booking.id }, { text: "Не зараз", callback_data: "pr|no" },
+          ]] } }));
+        }
+        if (!booking.summarySentAt && left <= 2 * 3600000) {
+          booking.summarySentAt = new Date(now()).toISOString();
+          store.touch();
+          actions.push(sessionCardAction(booking.psy, user, booking, "Зведення до сесії", true));
+        }
+      });
+    });
+    return actions;
+  }
+
+  // A flow's text, or null when no flow is waiting for text.
+  function flowText(chatId, text) {
+    const flow = flowOf(chatId);
+    if (!flow || !text.trim()) return null;
+    if (flow.kind === "plan") return planStep(chatId, flow, text);
+    if (flow.kind === "diary") {
+      if (DIARY_STEPS[flow.step].scale) {
+        const value = Number(text.trim());
+        if (!Number.isInteger(value) || value < 0 || value > 100) return [diaryAsk(chatId, flow.step)];
+        return diaryStep(chatId, flow, value);
+      }
+      return diaryStep(chatId, flow, text);
+    }
+    if (flow.kind === "topic") return createBooking(chatId, flow, text);
+    if (flow.kind === "prep") return prepStep(chatId, flow, text);
+    if (flow.kind === "schedule") return scheduleSave(chatId, text);
+    return null;
+  }
+
+  // Taps for the care features, or null for any other data.
+  function careCallback(chatId, parts) {
+    const key = parts[0];
+    if (key === "pl") {
+      if (parts[1] === "start") {
+        sessions.clearAll(chatId);
+        setFlow(chatId, { kind: "plan", step: 0, data: Object.assign({}, store.user(chatId).safetyPlan || {}) });
+        delete flowOf(chatId).data.updatedAt;
+        return [planAsk(chatId, 0)];
+      }
+      const flow = flowOf(chatId);
+      if (parts[1] === "skip" && flow && flow.kind === "plan") return planStep(chatId, flow, "");
+      return [];
+    }
+    if (key === "dy") {
+      if (parts[1] === "new") {
+        sessions.clearAll(chatId);
+        setFlow(chatId, { kind: "diary", step: 0, data: {} });
+        return [diaryAsk(chatId, 0)];
+      }
+      if (parts[1] === "b" || parts[1] === "a") {
+        const flow = flowOf(chatId);
+        const value = Number(parts[2]);
+        const expected = parts[1] === "b" ? "before" : "after";
+        if (!flow || flow.kind !== "diary" || DIARY_STEPS[flow.step].key !== expected || !Number.isInteger(value) || value < 0 || value > 100) return [];
+        return diaryStep(chatId, flow, value);
+      }
+      if (parts[1] === "list") {
+        const entries = store.user(chatId).diary.slice(-5).reverse();
+        if (!entries.length) return [send(chatId, "Записів ще немає.", { reply_markup: diaryIntroKeyboard() })];
+        return entries.map((entry) => send(chatId, diaryEntryText(entry, dateFor(chatId, Date.parse(entry.at)))));
+      }
+      if (parts[1] === "s") {
+        const entry = store.user(chatId).diary.find((item) => item.id === parts[2]);
+        const psyChatId = Number(parts[3]);
+        if (!entry || !consentedSpecialists(chatId).some((specialist) => specialist.chatId === psyChatId)) {
+          return [send(chatId, "Надіслати можна лише фахівцю, якому Ви надали згоду.")];
+        }
+        if (entry.sentTo.indexOf(psyChatId) === -1) entry.sentTo.push(psyChatId);
+        store.touch();
+        const share = activeShare(store.user(chatId), psyChatId);
+        return [send(psyChatId, "Від клієнта " + escapeHtml(share.clientName || "Клієнт") + ":\n\n" + diaryEntryText(entry, dateFor(psyChatId, Date.parse(entry.at)))),
+          send(chatId, "Надіслано: " + escapeHtml(psyName(psyChatId)) + ".")];
+      }
+      return [];
+    }
+    if (key === "sb") {
+      const psyChatId = Number(parts[1]);
+      if (!mayBook(chatId, psyChatId)) return [send(chatId, "Записатися можна лише до фахівця, якому Ви надали згоду.")];
+      const rows = dayRows(psyChatId);
+      return [send(chatId, rows.length ? "Оберіть день:" : "Вільних вікон зараз немає.", rows.length ? { reply_markup: { inline_keyboard: rows } } : {})];
+    }
+    if (key === "sd") {
+      const psyChatId = Number(parts[1]);
+      if (!mayBook(chatId, psyChatId) || !/^\d{8}$/.test(parts[2] || "")) return [];
+      const rows = timeRows(psyChatId, parts[2]);
+      return [send(chatId, rows.length ? "Оберіть час:" : "На цей день вільних вікон уже немає. /session", rows.length ? { reply_markup: { inline_keyboard: rows } } : {})];
+    }
+    if (key === "st") return chooseTime(chatId, Number(parts[1]), Number(parts[2]));
+    if (key === "bk") {
+      const flow = flowOf(chatId);
+      return flow && flow.kind === "topic" ? createBooking(chatId, flow, "") : [];
+    }
+    if (key === "sc") {
+      const found = findBooking(chatId, parts[1]);
+      if (!found || found.booking.status === "canceled") return [send(chatId, "Цей запис уже скасовано.")];
+      return cancelBooking(found, "client");
+    }
+    if (key === "bc" || key === "bx" || key === "bv") {
+      const denied = requireActive(chatId);
+      if (denied) return denied;
+      const found = findBooking(Number(parts[1]), parts[2]);
+      if (!found || found.booking.psy !== Number(chatId)) return [send(chatId, "Запис не знайдено.")];
+      if (key === "bv") return [sessionCardAction(chatId, found.client, found.booking, "Запис")];
+      if (found.booking.status === "canceled") return [send(chatId, "Цей запис уже скасовано.")];
+      if (key === "bx") return cancelBooking(found, "psy");
+      found.booking.status = "confirmed";
+      store.touch();
+      return [send(chatId, "Підтверджено: " + escapeHtml(whenFor(chatId, found.booking.at)) + "."),
+        send(found.client.chatId, "✅ " + escapeHtml(psyName(chatId)) + " підтверджує запис: " + escapeHtml(whenFor(chatId, found.booking.at)) + ".")];
+    }
+    if (key === "pr") {
+      if (parts[1] === "go") {
+        const found = findBooking(chatId, parts[2]);
+        if (!found || found.booking.status === "canceled") return [send(chatId, "Цей запис уже скасовано.")];
+        sessions.clearAll(chatId);
+        setFlow(chatId, { kind: "prep", step: 0, booking: found.booking.id, data: {} });
+        return [prepAsk(chatId, 0)];
+      }
+      if (parts[1] === "skip") {
+        const flow = flowOf(chatId);
+        return flow && flow.kind === "prep" ? prepStep(chatId, flow, "") : [];
+      }
+      return [send(chatId, "Добре. Фахівець отримає зведення з балами перед зустріччю.")];
+    }
+    if (key === "ss") return scheduleAsk(chatId);
+    return null;
+  }
+
   // ---------------------------------------------------------- homework
 
   // A specialist who tapped "Дати домашнє завдання" and has not written it
@@ -780,8 +1266,13 @@ export function createRouter(context) {
     user.shares.filter((share) => !share.revokedAt).forEach((share) => {
       actions.push(send(share.psy, psyClientDeleted(share.clientName)));
     });
+    // The client's sessions go with their data; each specialist is told.
+    upcomingOf(chatId).forEach((booking) => {
+      actions.push(send(booking.psy, "Запис скасовано: клієнт видалив свої дані (" + escapeHtml(whenFor(booking.psy, booking.at)) + ")."));
+    });
     if (user.psy) {
       clientsOf(store, chatId).forEach((entry) => {
+        actions.push(...cancelBetween(entry.user.chatId, chatId));
         revokeShare(store, entry.user.chatId, chatId, "psy", now());
         actions.push(send(entry.user.chatId, psyGone(user.psy.name || "фахівець")));
       });
@@ -1078,6 +1569,18 @@ export function createRouter(context) {
         return clientsActions(chatId);
       case "homework":
         return homeworkActions(chatId);
+      case "plan":
+        return planCommand(chatId);
+      case "diary":
+        return [send(chatId, diaryIntro(), { reply_markup: diaryIntroKeyboard() })];
+      case "insights":
+        return insightsActions(chatId);
+      case "session":
+        return sessionCommand(chatId);
+      case "sessions":
+        return sessionsForPsy(chatId);
+      case "schedule":
+        return scheduleAsk(chatId);
       case "privacy":
         return privacyActions(chatId);
       case "admin":
@@ -1085,6 +1588,10 @@ export function createRouter(context) {
       case "stats":
         return statsActions(chatId);
       case "cancel": {
+        if (flowOf(chatId)) {
+          flows.delete(Number(chatId));
+          return [send(chatId, "Перервано. Повернутися можна будь-коли.")];
+        }
         if (homeworkDraft(chatId)) {
           homeworkDrafts.delete(Number(chatId));
           return [send(chatId, "Завдання не надіслано.")];
@@ -1313,7 +1820,7 @@ export function createRouter(context) {
     if (detectCrisis(text)) {
       store.updateUser(chatId, { crisisAt: new Date(now()).toISOString() });
       const rest = textActions(chatId, text, message, true);
-      return [sosBlock(chatId)].concat(rest, crisisSignalActions(chatId));
+      return [sosBlock(chatId)].concat(planActions(chatId), rest, crisisSignalActions(chatId));
     }
     return textActions(chatId, text, message, false);
   }
@@ -1322,6 +1829,8 @@ export function createRouter(context) {
   // request, a weekly note, a digit answer, or free text. After a crisis
   // phrase the help block has already been sent, so free text adds nothing.
   function textActions(chatId, text, message, afterCrisis) {
+    const flowReply = flowText(chatId, text);
+    if (flowReply) return flowReply;
     const application = sessions.application(chatId, now());
     if (application) return applicationText(chatId, application, text);
     const booking = sessions.booking(chatId, now());
@@ -1376,6 +1885,8 @@ export function createRouter(context) {
     }
 
     const parts = data.split("|");
+    const care = careCallback(chatId, parts);
+    if (care) return [ack(query.id)].concat(care);
     if (parts[0] === "s") {
       const instrument = getInstrument(parts[1]);
       if (!instrument) return [ack(query.id, "Невідомий опитувальник")];
@@ -1526,7 +2037,7 @@ export function createRouter(context) {
       const share = revokeShare(store, chatId, psyChatId, "client", now());
       if (!share) return [ack(query.id), send(chatId, "Цю згоду вже відкликано.")];
       return [ack(query.id, "Згоду відкликано"), send(chatId, revoked(psyName(psyChatId))),
-        send(psyChatId, psyClientRevoked(share.clientName))];
+        send(psyChatId, psyClientRevoked(share.clientName))].concat(cancelBetween(chatId, psyChatId));
     }
     if (parts[0] === "cl") return [ack(query.id)].concat(clientCard(chatId, Number(parts[1])));
     if (parts[0] === "hw") return [ack(query.id)].concat(homeworkStart(chatId, Number(parts[1])));
@@ -1540,7 +2051,7 @@ export function createRouter(context) {
       const share = revokeShare(store, clientChatId, chatId, "psy", now());
       if (!share) return [ack(query.id)];
       return [ack(query.id), send(chatId, psyDisconnected(share.clientName)),
-        send(clientChatId, clientDisconnectedByPsy(psyName(chatId)))];
+        send(clientChatId, clientDisconnectedByPsy(psyName(chatId)))].concat(cancelBetween(clientChatId, chatId));
     }
     if (parts[0] === "b") {
       if (parts[1] === "start") return [ack(query.id)].concat(bookingStart(chatId));

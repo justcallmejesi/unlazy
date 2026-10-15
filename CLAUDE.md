@@ -80,6 +80,15 @@ consented specialist: the fact and the time, never the words, once an hour,
 only under consent `2026-10-v2` or later (`allowsCrisisSignal`); an older
 consent is updated by the client in `/privacy`, never silently.
 
+Care features live in `telegram-bot/src/care.mjs` with the conversations in
+the router (`flows`, in memory): the safety plan `/plan` (free, never shared,
+sent after the SOS block with 103/112/7333 on its first line), the thought
+diary `/diary` (free; an entry reaches a specialist only when the person sends
+it), mood insights `/insights` (paid), and sessions: the specialist's weekly
+template `/schedule`, booking `/session` for consented clients, cards with
+scores only while consent stands, prep the day before, a summary two hours
+before. Bookings live in the client's record, so `/delete` takes them.
+
 The privacy policy is `telegram-bot/webapp/privacy.html`, linked from
 `/privacy`, `/about` and the app. Change it with any change to what is stored,
 who sees it or how long it is kept. The owner's PC pulls a daily copy of the

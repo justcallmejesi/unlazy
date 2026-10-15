@@ -42,6 +42,7 @@ import { DEFAULT_CRISIS_CONTACT, loadConfig, parseEnvFile } from "../src/config.
 import { BotRuntime, buildBot } from "../bot.mjs";
 import { MAX_PAYLOAD_BYTES, parseStartCode, parseWebAppPayload } from "../src/webapp.mjs";
 import { detectCrisis, normalizeText } from "../src/crisis.mjs";
+import { freeSlots, parseWeeklyTemplate } from "../src/care.mjs";
 import { SHARED, isCurrent, staleCopies } from "../webapp/build.mjs";
 import {
   ACCESS_BUTTON, COMMANDS, COMMAND_GROUPS, MENU_MAIN, MESSAGE_LIMIT, accessOffer, historyMessages, isAccessText,
@@ -1087,6 +1088,152 @@ test("crisis signal: the specialist hears the fact, never the words, under the n
   assert.equal(h.store.user(CLIENT).shares[0].version, CONSENT_VERSION);
   h.clock.now += 2 * 60 * 60000;
   assert.equal(h.client.say("мені погано").filter((action) => action.payload.chat_id === PSY).length, 1);
+});
+
+// --------------------------------------------------------------- care: plan, diary, insights, sessions
+
+test("plan: six skippable steps, saved, and sent after the help block, emergency numbers first", () => {
+  const h = harness({ config: { contact: BOOKING_CONTACT } });
+  h.say("/start");
+  assert.match(lastText(h.say("/plan")), /План безпеки/);
+  assert.match(lastText(h.tap("pl|start")), /Крок 1 з 6/);
+  h.say("не можу заснути, ні з ким не говорю");
+  h.tap("pl|skip");
+  h.say("парк біля дому");
+  h.say("сестра Оксана");
+  h.say("віддати ліки мамі");
+  const saved = h.say("мій кіт і донька");
+  assert.match(textsOf(saved).join("\n"), /План збережено/);
+  const plan = h.store.user(777).safetyPlan;
+  assert.equal(plan.signs, "не можу заснути, ні з ким не говорю");
+  assert.equal(plan.coping, undefined, "a skipped step stays empty");
+  const sos = h.say("/sos");
+  assert.match(sos[0].payload.text, /7333/);
+  assert.match(sos[1].payload.text, /Мій план безпеки/);
+  assert.ok(sos[1].payload.text.indexOf("103") < sos[1].payload.text.indexOf("сестра Оксана"));
+  const crisis = h.say("мені дуже погано");
+  assert.match(textsOf(crisis)[0], /7333/);
+  assert.match(textsOf(crisis)[1], /сестра Оксана/);
+  assert.equal(hasPayButton(crisis), false);
+});
+
+test("diary: eight steps with two 0 to 100 scales, kept private until one entry is sent", () => {
+  const h = linkedHarness();
+  h.client.tap("dy|new");
+  h.client.say("Начальник не відповів на лист");
+  h.client.say("Мене звільнять");
+  h.client.say("тривога");
+  assert.equal(h.client.say("абв").length, 1, "a scale step asks again on a non-number");
+  h.client.tap("dy|b|80");
+  h.client.say("Він сердитий був учора");
+  h.client.say("Він часто відповідає пізно, мене хвалили");
+  h.client.say("Можливо, він просто зайнятий");
+  const done = h.client.tap("dy|a|40");
+  assert.match(textsOf(done).join("\n"), /слабшою на 40/);
+  const entry = h.store.user(CLIENT).diary[0];
+  assert.equal(entry.before, 80);
+  assert.equal(entry.after, 40);
+  const send = done.find((action) => action.payload.reply_markup).payload.reply_markup.inline_keyboard[0][0];
+  assert.equal(send.callback_data, "dy|s|" + entry.id + "|" + PSY);
+  const sent = h.client.tap(send.callback_data);
+  assert.match(sent.find((action) => action.payload.chat_id === PSY).payload.text, /Мене звільнять/);
+  assert.deepEqual(h.store.user(CLIENT).diary[0].sentTo, [PSY]);
+  assert.match(textsOf(h.client.tap("dy|s|" + entry.id + "|" + OWNER)).join("\n"), /лише фахівцю, якому/);
+});
+
+test("insights: patterns by tag and weekday after 14 check-ins, behind full access", () => {
+  const h = harness();
+  h.say("/start");
+  assert.match(lastText(h.say("/insights")), /після 14/);
+  for (let day = 0; day < 16; day++) {
+    const poorSleep = day % 2 === 0;
+    h.store.setMood(777, {
+      date: new Date(WED_NOON_UTC - (16 - day) * DAY_MS).toISOString().slice(0, 10),
+      rating: poorSleep ? 3 : 7, tags: poorSleep ? ["sleep"] : ["people"], at: null,
+    });
+  }
+  const text = lastText(h.say("/insights"));
+  assert.match(text, /«Сон» настрій у середньому нижчий на 4,0/);
+  assert.match(text, /не доведені причини/);
+  h.clock.now += 20 * DAY_MS;
+  assert.match(lastText(h.say("/insights")), /Повний доступ/);
+});
+
+test("schedule: a weekly template in words becomes slots two weeks ahead", () => {
+  assert.deepEqual(parseWeeklyTemplate("Пн 18:00, 19:00; ср 10.00"), { 1: ["18:00", "19:00"], 3: ["10:00"] });
+  assert.equal(parseWeeklyTemplate("коли зручно"), null);
+  const offset = () => 180;
+  const slots = freeSlots({ slots: { 5: ["18:00"] } }, "2026-09-16", WED_NOON_UTC, offset, []);
+  assert.equal(slots[0].date, "2026-09-18");
+  assert.equal(slots[0].at, Date.parse("2026-09-18T15:00:00Z"));
+  assert.equal(slots.length, 2, "two Fridays within fourteen days");
+  assert.equal(freeSlots({ slots: { 5: ["18:00"] } }, "2026-09-16", WED_NOON_UTC, offset, [slots[0].at]).length, 1);
+});
+
+test("sessions: a client books a slot with a topic, the specialist sees scores, prep and the summary arrive", () => {
+  const h = linkedHarness();
+  h.client.say("/gad7");
+  [2, 2, 2, 2, 1, 1, 1].forEach((value, index) => h.client.tap(["a", h.sessions.get(CLIENT, h.clock.now).id, index, value].join("|")));
+  h.client.tap("n|" + h.sessions.pendingNote(CLIENT, h.clock.now).id);
+  h.psy.say("/schedule");
+  assert.match(lastText(h.psy.say("Пт 18:00, 19:00")), /Розклад збережено/);
+  const offer = h.client.say("/session");
+  const day = offer[0].payload.reply_markup.inline_keyboard[0][0];
+  assert.equal(day.callback_data, "sd|" + PSY + "|20260918");
+  const times = h.client.tap(day.callback_data);
+  const slot = times.find((action) => action.payload.reply_markup).payload.reply_markup.inline_keyboard[0][0];
+  assert.equal(slot.text, "18:00");
+  assert.match(lastText(h.client.tap(slot.callback_data)), /Про що хотілося б поговорити/);
+  const booked = h.client.say("Тривога перед роботою");
+  const card = booked.find((action) => action.payload.chat_id === PSY);
+  assert.match(card.payload.text, /Новий запис/);
+  assert.match(card.payload.text, /Тривога перед роботою/);
+  assert.match(card.payload.text, /GAD-7 11\/21/);
+  const booking = h.store.user(CLIENT).bookings[0];
+  assert.equal(booking.status, "pending");
+  // The taken slot is gone for everyone.
+  assert.equal(JSON.stringify(h.client.tap(day.callback_data)).indexOf('"text":"18:00"'), -1);
+  const confirmed = h.psy.tap("bc|" + CLIENT + "|" + booking.id);
+  assert.match(confirmed.find((action) => action.payload.chat_id === CLIENT).payload.text, /підтверджує запис/);
+
+  // The day before, in the daytime: the prep, answered, goes to the specialist.
+  h.clock.now = Date.parse("2026-09-17T12:00:00Z");
+  const invite = h.router.habitActions().find((action) => /Скоро сесія/.test(action.payload.text || ""));
+  assert.ok(invite);
+  h.client.tap("pr|go|" + booking.id);
+  h.client.say("Спала краще");
+  h.client.tap("pr|skip");
+  const prep = h.client.say("Про конфлікт із колегою");
+  const prepCard = prep.find((action) => action.payload.chat_id === PSY);
+  assert.match(prepCard.payload.text, /Підготовка до сесії/);
+  assert.match(prepCard.payload.text, /Спала краще/);
+  assert.match(prepCard.payload.text, /конфлікт із колегою/);
+  h.clock.now = Date.parse("2026-09-18T14:00:00Z");
+  assert.equal(h.router.habitActions().some((action) => action.payload.chat_id === PSY), false, "no second summary");
+  assert.match(lastText(h.psy.say("/sessions")), /Записи і розклад/);
+});
+
+test("sessions: no prep means a summary two hours before; cancels and lost consent tell both sides", () => {
+  const h = linkedHarness();
+  h.psy.say("/schedule");
+  h.psy.say("Пт 18:00, 19:00");
+  h.client.tap("st|" + PSY + "|" + Date.parse("2026-09-18T15:00:00Z"));
+  h.client.tap("bk|skip");
+  const first = h.store.user(CLIENT).bookings[0];
+  h.clock.now = Date.parse("2026-09-18T13:30:00Z");
+  const summary = h.router.habitActions().find((action) => action.payload.chat_id === PSY);
+  assert.match(summary.payload.text, /Зведення до сесії/);
+  assert.match(summary.payload.text, /Підготовку клієнт не заповнив/);
+
+  h.clock.now = WED_NOON_UTC;
+  const canceled = h.client.tap("sc|" + first.id);
+  assert.ok(canceled.some((action) => action.payload.chat_id === PSY && /скасовано клієнтом/.test(action.payload.text)));
+  h.client.tap("st|" + PSY + "|" + Date.parse("2026-09-18T16:00:00Z"));
+  h.client.tap("bk|skip");
+  const revoked = h.client.tap("rv|" + PSY);
+  assert.ok(revoked.some((action) => action.payload.chat_id === PSY && /Записи клієнта скасовано/.test(action.payload.text)));
+  assert.equal(h.store.user(CLIENT).bookings.every((booking) => booking.status === "canceled"), true);
+  assert.match(textsOf(h.client.tap("st|" + PSY + "|" + Date.parse("2026-09-25T15:00:00Z"))).join("\n"), /лише до фахівця/);
 });
 
 test("psy: the state follows approval, subscription and the owner's free access", () => {

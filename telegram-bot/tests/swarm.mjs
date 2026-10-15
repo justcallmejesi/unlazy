@@ -264,6 +264,52 @@ function deleteAll(user) {
   user.deleted = true;
 }
 
+// The first button in a reply whose callback_data starts with `prefix`.
+function buttonFrom(actions, prefix) {
+  for (const action of actions) {
+    const markup = keyboardOf(action);
+    if (!markup || !markup.inline_keyboard) continue;
+    const found = markup.inline_keyboard.flat().find((button) => button.callback_data && button.callback_data.indexOf(prefix) === 0);
+    if (found) return found.callback_data;
+  }
+  return null;
+}
+
+function fillPlan(user) {
+  tap(user, "pl|start", { freeFeature: "plan" });
+  ["не сплю, ні з ким не говорю", "", "парк", "подруга", "віддати ліки мамі", "мій пес"].forEach((text) => {
+    if (text) say(user, text, { freeFeature: "plan" });
+    else tap(user, "pl|skip", { freeFeature: "plan" });
+  });
+}
+
+function writeDiary(user) {
+  tap(user, "dy|new", { freeFeature: "diary" });
+  say(user, "Не відповіли на повідомлення", { freeFeature: "diary" });
+  say(user, "Я нікому не потрібен", { freeFeature: "diary" });
+  say(user, "сум", { freeFeature: "diary" });
+  tap(user, "dy|b|" + between(5, 10) * 10, { freeFeature: "diary" });
+  say(user, "Вчора не писали", { freeFeature: "diary" });
+  say(user, "Друзі кличуть гуляти", { freeFeature: "diary" });
+  say(user, "Можливо, вони зайняті", { freeFeature: "diary" });
+  const done = tap(user, "dy|a|" + between(2, 6) * 10, { freeFeature: "diary" });
+  const send = buttonFrom(done, "dy|s|");
+  if (send && chance(0.5)) tap(user, send);
+}
+
+function bookSession(user) {
+  const offer = say(user, "/session");
+  const pickSpecialist = buttonFrom(offer, "sb|");
+  const days = pickSpecialist ? tap(user, pickSpecialist) : offer;
+  const day = buttonFrom(days, "sd|");
+  if (!day) return;
+  const time = buttonFrom(tap(user, day), "st|");
+  if (!time) return;
+  tap(user, time);
+  if (chance(0.6)) say(user, pick(["Тривога перед роботою", "Сварки вдома", "Не можу зосередитися"]));
+  else tap(user, "bk|skip");
+}
+
 const FREE_COMMANDS = ["/sos", "/selfhelp", "/report", "/export", "/contact", "/book"];
 const CRISIS_TEXTS = ["мені погано", "я не хочу жити", "хочу померти", "мне плохо", "не хочу жить", "допоможіть",
   "немає сенсу жити", "мені дуже погано, не можу більше"];
@@ -313,6 +359,8 @@ const PERSONAS = {
       if (chance(0.3)) tap(user, "m|" + between(3, 7));
       if (chance(0.2)) tap(user, "p|gad7", { freeFeature: "p|gad7" });
       if (chance(0.1)) say(user, "мені тривожно");
+      if (chance(0.08)) writeDiary(user);
+      if (user.psy && chance(0.15)) bookSession(user);
       if (user.today - user.startDay >= 5 && chance(0.08)) buy(user);
     },
   },
@@ -329,6 +377,11 @@ const PERSONAS = {
       if (chance(0.2)) say(user, pick(["/results", "/sleep", "/mood", "📈 Результати", "скільки коштує", "/remind"]));
       if (chance(0.15)) say(user, pick(["/sos", SOS_BUTTON]), { freeFeature: "/sos" });
       if (chance(0.2)) tap(user, "m|" + between(1, 4));
+      if (!user.planned && chance(0.15)) {
+        fillPlan(user);
+        user.planned = true;
+      }
+      if (chance(0.05)) say(user, "/insights");
     },
   },
   tracker: {
@@ -340,6 +393,8 @@ const PERSONAS = {
         skipOrWriteNote(user, pick(NOTES));
       }
       if (chance(0.9)) tap(user, "m|" + between(4, 9));
+      if (chance(0.05)) say(user, "/insights");
+      if (user.psy && chance(0.1)) bookSession(user);
       if ((user.today - user.startDay) % 7 === 3) takeTest(user, pick(["gad7", "phq9", "sleep", "stress"]), () => between(0, 2));
       if (user.sawTrialNotice && !user.paid && chance(0.6)) buy(user);
       if (user.today - user.startDay >= 6 && !user.paid && chance(0.15)) buy(user);
@@ -391,6 +446,8 @@ const PERSONAS = {
           is_recurring: true, is_first_recurring: true,
         });
         say(user, "/invite");
+        say(user, "/schedule");
+        say(user, pick(["Пн 18:00, 19:00; Ср 10:00", "Вт 09:00, 10:00, 11:00; Чт 17:00", "Пт 12:00; Сб 10:00, 11:00"]));
         return;
       }
       const code = store.hasUser(user.chatId) && store.user(user.chatId).psy ? store.user(user.chatId).psy.inviteCode : null;
@@ -416,6 +473,13 @@ const PERSONAS = {
         if (open.length && chance(0.6)) tap(client, "hd|" + open[0].id);
       }
       if (client && chance(0.2)) tap(user, "cl|" + client.chatId);
+      // Confirm what waits, sometimes cancel one.
+      user.clients.forEach((person) => {
+        if (person.deleted || !store.hasUser(person.chatId)) return;
+        store.user(person.chatId).bookings.filter((booking) => booking.psy === user.chatId && booking.status === "pending")
+          .forEach((booking) => tap(user, (chance(0.9) ? "bc|" : "bx|") + person.chatId + "|" + booking.id));
+      });
+      if (chance(0.1)) say(user, "/sessions");
     },
   },
   confused: {
@@ -453,7 +517,7 @@ for (let index = 0; index < USERS; index++) {
     // Most arrive in the first week; specialists early, so clients exist.
     joinDay: persona === "psychologist" ? between(0, 2) : between(0, 9),
     started: false, startDay: null, tested: false, paid: false, deleted: false, sawPayment: false, gotInvoice: false,
-    sawTrialNotice: false, returned: false, lastActiveDay: null, today: 0, clients: [], psy: null,
+    sawTrialNotice: false, returned: false, planned: false, lastActiveDay: null, today: 0, clients: [], psy: null,
   });
 }
 
@@ -474,6 +538,14 @@ function deliverUnasked(actions, label) {
       if (/закінчується безкоштовний період/.test(text)) user.sawTrialNotice = true;
       // Trackers answer most reminders and accept the daily one; others mostly do not.
       if (/Нагадувати щодня/.test(text) && (user.persona === "tracker" ? chance(0.9) : chance(0.2))) tap(user, "dm|on");
+      const prep = /Скоро сесія/.test(text) ? buttonFrom([action], "pr|go|") : null;
+      if (prep && chance(0.7)) {
+        tap(user, prep);
+        ["Стало трохи краще", "", "Про роботу"].forEach((answer) => {
+          if (answer) say(user, answer);
+          else tap(user, "pr|skip");
+        });
+      }
       if (/Як настрій сьогодні/.test(text) && (user.persona === "tracker" ? chance(0.85) : chance(0.2))) {
         tap(user, "m|" + between(3, 9));
       }
@@ -550,6 +622,14 @@ rows.forEach((row) => {
 console.log("");
 console.log(statsText.split("\n").filter((line) => /Воронка|уперше|перший тест|наступного дня|пропозицію оплати|рахунок|Оплатили/.test(line))
   .map((line) => "  " + line.replace(/<[^>]+>/g, "")).join("\n"));
+// What the care features saw, to be sure they ran.
+const everyone = store.allUsers();
+const bookingsAll = everyone.flatMap((user) => user.bookings);
+console.log("care: plans " + everyone.filter((user) => user.safetyPlan).length +
+  ", diary entries " + everyone.reduce((sum, user) => sum + user.diary.length, 0) +
+  ", bookings " + bookingsAll.length + " (confirmed " + bookingsAll.filter((booking) => booking.status === "confirmed").length +
+  ", canceled " + bookingsAll.filter((booking) => booking.status === "canceled").length +
+  ", with prep " + bookingsAll.filter((booking) => booking.prep).length + ")");
 console.log("");
 if (violations.length) {
   console.log("VIOLATIONS: " + Object.keys(violationKinds).map((kind) => kind + " x" + violationKinds[kind]).join(", "));
