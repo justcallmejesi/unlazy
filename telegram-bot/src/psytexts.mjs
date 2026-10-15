@@ -351,6 +351,16 @@ function stars(count, usd) {
   return count + " " + starWord(count) + ", це близько $" + usd.toFixed(2) + " для Вас";
 }
 
+// Each funnel step is counted per day as an event, never per person.
+const FUNNEL_LABELS = [
+  ["start", "Натиснули /start уперше"],
+  ["firstTest", "Пройшли перший тест"],
+  ["returned", "Повернулися наступного дня"],
+  ["paywall", "Побачили пропозицію оплати"],
+  ["invoice", "Отримали рахунок"],
+  ["paid", "Оплатили повний доступ"],
+];
+
 // The owner's /stats: counts only, never a name or a result. See stats.mjs.
 export function adminStats(stats) {
   const scales = INSTRUMENT_LIST.map((instrument) => instrument.title + " " + stats.byInstrument[instrument.id]);
@@ -377,8 +387,15 @@ export function adminStats(stats) {
     "Щомісяця від підписок: " + stars(stats.psyMonthlyStars, stats.psyMonthlyUsd),
     "Клієнтів зі згодою фахівцю: " + stats.clients,
     "",
+    "<b>Воронка</b> (7 днів / 30 днів)",
+  ].concat(FUNNEL_LABELS.map(([step, label]) => {
+    const week = stats.funnel7 ? stats.funnel7[step] : 0;
+    const month = stats.funnel30 ? stats.funnel30[step] : 0;
+    return label + ": " + week + " / " + month;
+  }), [
+    "",
     "Лише кількості, без імен і результатів.",
-  ].join("\n");
+  ]).join("\n");
 }
 
 export function adminDecided(name, approved) {

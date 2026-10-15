@@ -996,3 +996,87 @@ export function exportCaption() {
 export function unknownInput() {
   return "Не зрозумів команду. /help показує список, /gad7 і /phq9 запускають опитувальники.";
 }
+
+// ----------------------------------------------------------------- free text and habits
+
+// Free text that is neither a command, a button nor something the bot waits
+// for. Friendly, with the main menu, never a dead end.
+export function friendlyUnknown() {
+  return "Я поки не розумію довільний текст, але все, що я вмію, є в меню під полем введення. " +
+    "Якщо зараз важко, натисніть «" + escapeHtml(SOS_BUTTON) + "».";
+}
+
+export function shortGreeting(name) {
+  return (name ? "Привіт, " + escapeHtml(name) + "!" : "Привіт!") +
+    " Я допомагаю стежити за тривогою і настроєм за короткими тестами. Почнімо з першого?";
+}
+
+// Under the /start greeting for someone with no result yet, and under the
+// short reply to a hello: one obvious next step.
+export function startCtaKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: "▶️ Пройти тест за 2 хвилини", callback_data: "s|gad7" }],
+      [{ text: "📋 Обрати інший тест", callback_data: "mn|tests" }],
+    ],
+  };
+}
+
+// A locked feature for someone who recently marked PHQ-9 item 9 or wrote a
+// crisis phrase: what stays open, no price and no pay button.
+export function lockedGentle() {
+  return [
+    "Ця частина зараз закрита.",
+    "",
+    "Безкоштовно і назавжди: GAD-7 і PHQ-9, техніки самодопомоги /selfhelp, «" + escapeHtml(SOS_BUTTON) +
+      "» /sos, звіт для фахівця /report і запис на консультацію /book.",
+  ].join("\n");
+}
+
+export const DAILY_MOOD_TIME = "20:00";
+
+export function dailyMoodOffer() {
+  return "Нагадувати щодня о " + DAILY_MOOD_TIME + " відмітити настрій? Одне натискання, а за тиждень видно, " +
+    "як змінюється стан. Вимкнути можна кнопкою під будь-яким нагадуванням.";
+}
+
+export function dailyMoodOfferKeyboard() {
+  return { inline_keyboard: [[
+    { text: "Так, нагадувати", callback_data: "dm|on" },
+    { text: "Ні, дякую", callback_data: "dm|off" },
+  ]] };
+}
+
+export function dailyMoodSet(enabled) {
+  return enabled
+    ? "Домовились: щодня о " + DAILY_MOOD_TIME + " я спитаю про настрій. Якщо два дні поспіль не відповісте, я замовкну, поки Ви не напишете самі."
+    : "Добре, без щоденних нагадувань. Відмітити настрій можна будь-коли: /mood.";
+}
+
+export function dailyMoodKeyboard() {
+  const keyboard = moodKeyboard();
+  return { inline_keyboard: keyboard.inline_keyboard.concat([[{ text: "Вимкнути щоденне нагадування", callback_data: "dm|off" }]]) };
+}
+
+export function dailyMoodQuestion() {
+  return "Як настрій сьогодні? Одне натискання від 1 до 10.";
+}
+
+// `entries` are this week's check-ins, at least three.
+export function moodWeekSummary(entries) {
+  const average = entries.reduce((sum, entry) => sum + entry.rating, 0) / entries.length;
+  const best = entries.reduce((top, entry) => (entry.rating > top.rating ? entry : top), entries[0]);
+  const weekday = WEEKDAY_NAMES[new Date(best.date + "T12:00:00Z").getUTCDay()].name;
+  return "📈 <b>Підсумок тижня</b>\nВідміток: " + entries.length + ", середній настрій " +
+    average.toFixed(1).replace(".", ",") + " з 10.\nНайкращий день: " + weekday + " (" + best.rating + ").";
+}
+
+// Sent once, on the last day of the trial.
+export function trialEnding() {
+  return ["<b>Завтра закінчується безкоштовний період</b>", "", "Закриється:"]
+    .concat(bullets(unlockedLines()), ["", "Назавжди безкоштовно:"], bullets(freeLines())).join("\n");
+}
+
+export function trialEndingKeyboard() {
+  return { inline_keyboard: [[{ text: ACCESS_BUTTON, callback_data: "acc|show" }]] };
+}

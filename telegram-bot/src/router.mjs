@@ -53,6 +53,18 @@ import {
 import { MAX_HOMEWORK_PER_USER, MAX_HOMEWORK_TEXT } from "./store.mjs";
 import { randomBytes } from "node:crypto";
 import { parseStartCode, parseWebAppPayload } from "./webapp.mjs";
+import { detectCrisis, detectIntent } from "./crisis.mjs";
+import {
+  DAILY_MOOD_TIME, dailyMoodKeyboard, dailyMoodOffer, dailyMoodOfferKeyboard, dailyMoodQuestion, dailyMoodSet,
+  friendlyUnknown, lockedGentle, moodWeekSummary, shortGreeting, startCtaKeyboard, trialEnding,
+  trialEndingKeyboard,
+} from "./texts.mjs";
+
+// How long a marked PHQ-9 item 9 or a typed crisis phrase keeps every
+// unasked-for payment prompt away.
+const RISK_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+// Two daily reminders without a word back, and the bot falls silent.
+const QUIET_AFTER_UNANSWERED = 2;
 
 const HTML = { parse_mode: "HTML" };
 // Commands that start a questionnaire, mapped to their instrument.
@@ -177,8 +189,127 @@ export function createRouter(context) {
   function sosActions(chatId) {
     sessions.clearNote(chatId);
     sessions.clearBooking(chatId);
+    return [sosBlock(chatId)];
+  }
+
+  // The same help block without closing what the bot was waiting for: a
+  // crisis phrase typed as a weekly note still becomes the note.
+  function sosBlock(chatId) {
     const keyboard = sosKeyboard(config.contact);
-    return [send(chatId, sosMessage(config.crisisContact, config.contact), keyboard ? { reply_markup: keyboard } : {})];
+    return send(chatId, sosMessage(config.crisisContact, config.contact), keyboard ? { reply_markup: keyboard } : {});
+  }
+
+  // A marked PHQ-9 item 9 or a typed crisis phrase within RISK_WINDOW_MS.
+  // Such a person never gets an unasked-for price, pay button or reminder of
+  // the trial; /buy and "⭐ Повний доступ" still answer, as their own choice.
+  function atRisk(chatId) {
+    if (!store.hasUser(chatId)) return false;
+    const user = store.user(chatId);
+    const since = now() - RISK_WINDOW_MS;
+    if (user.crisisAt && Date.parse(user.crisisAt) >= since) return true;
+    return user.results.some((entry) => entry.instrument === "phq9" && entry.risk && Date.parse(entry.completedAt) >= since);
+  }
+
+  // ---------------------------------------------------------- funnel
+
+  // Counted per day of the bot's own zone, never per person.
+  function funnelDay() {
+    return localDateKey(resolveSchedule(null, config.reminder), now());
+  }
+
+  function countFunnel(step) {
+    store.countFunnel(funnelDay(), step);
+  }
+
+  // Any message or tap: the person is here, so the daily reminder may speak
+  // again, and a first return on the next day is counted once.
+  function noteActivity(chatId) {
+    if (!store.hasUser(chatId)) return;
+    const user = store.user(chatId);
+    if (user.dailyMood.unanswered) user.dailyMood = Object.assign({}, user.dailyMood, { unanswered: 0 });
+    if (!user.returnedCounted && user.firstSeenAt) {
+      const schedule = scheduleFor(chatId);
+      const firstDay = localDateKey(schedule, Date.parse(user.firstSeenAt));
+      const nextDay = localDateKey(schedule, Date.parse(user.firstSeenAt) + DAY_MS);
+      const today = localDateKey(schedule, now());
+      if (today === nextDay) {
+        countFunnel("returned");
+        user.returnedCounted = true;
+      } else if (today > nextDay && today !== firstDay) {
+        // Too late to count as the next day; stop checking.
+        user.returnedCounted = true;
+      }
+    }
+    store.touch();
+  }
+
+  // ---------------------------------------------------------- habits
+
+  // Offered once, after the first result, while the reminder would work.
+  // Sent by habitActions, never inside a conversation.
+  function dailyMoodOfferActions(chatId) {
+    const user = store.hasUser(chatId) ? store.user(chatId) : null;
+    if (!user || user.dailyMood.offered || !access(chatId).active) return [];
+    user.dailyMood = Object.assign({}, user.dailyMood, { offered: true });
+    store.touch();
+    return [send(chatId, dailyMoodOffer(), { reply_markup: dailyMoodOfferKeyboard() })];
+  }
+
+  // The third check-in of a week brings a short summary, once a week.
+  function moodSummaryActions(chatId) {
+    const user = store.user(chatId);
+    const since = localDateKey(scheduleFor(chatId), now() - 6 * DAY_MS);
+    const week = user.moods.filter((entry) => entry.date >= since);
+    if (week.length < 3) return [];
+    if (user.moodSummaryAt && Date.parse(user.moodSummaryAt) > now() - 6 * DAY_MS) return [];
+    store.updateUser(chatId, { moodSummaryAt: new Date(now()).toISOString() });
+    return [send(chatId, moodWeekSummary(week))];
+  }
+
+  function localMinutes(schedule, ms) {
+    const local = new Date(ms + offsetAt(schedule, ms) * 60000);
+    return local.getUTCHours() * 60 + local.getUTCMinutes();
+  }
+
+  // Everything the bot says unasked, apart from the weekly reminder: the
+  // daily mood question at 20:00 local and the last-trial-day notice. Marks
+  // what it sends as sent, so a second call at the same time sends nothing.
+  function habitActions() {
+    const actions = [];
+    const [hour, minute] = DAILY_MOOD_TIME.split(":").map(Number);
+    store.allUsers().forEach((user) => {
+      const chatId = user.chatId;
+      const quiet = user.dailyMood.unanswered >= QUIET_AFTER_UNANSWERED;
+      if (quiet) return;
+      const schedule = resolveSchedule(user, config.reminder);
+      const today = localDateKey(schedule, now());
+      const minutes = localMinutes(schedule, now());
+      const state = entitlement(user, now());
+      if (user.dailyMood.enabled && state.active && user.dailyMood.lastSentDate !== today &&
+        minutes >= hour * 60 + minute && !user.moods.some((entry) => entry.date === today)) {
+        user.dailyMood = Object.assign({}, user.dailyMood, {
+          lastSentDate: today, unanswered: user.dailyMood.unanswered + 1,
+        });
+        store.touch();
+        actions.push(send(chatId, dailyMoodQuestion(), { reply_markup: dailyMoodKeyboard() }));
+      }
+      // The daily reminder is offered once, some minutes after the first
+      // result, so it never cuts into the weekly note that follows a test.
+      const firstResult = user.results[0];
+      if (!user.dailyMood.offered && firstResult && state.active && now() - Date.parse(firstResult.completedAt) >= 10 * 60000 &&
+        minutes >= 10 * 60 && minutes < 21 * 60) {
+        actions.push(...dailyMoodOfferActions(chatId));
+      }
+      // Daytime only, on the day before the trial ends, never to someone at risk.
+      if (state.kind === "trial" && !user.trialNoticeAt && user.trialEndsAt - now() <= 2 * DAY_MS &&
+        user.trialEndsAt - now() > DAY_MS &&
+        minutes >= 10 * 60 && minutes < 21 * 60 && !atRisk(chatId)) {
+        store.updateUser(chatId, { trialNoticeAt: new Date(now()).toISOString() });
+        countFunnel("paywall");
+        actions.push(send(chatId, trialEnding(), { reply_markup: trialEndingKeyboard() }));
+      }
+    });
+    return actions;
   }
 
   function practicesActions(chatId, key) {
@@ -378,7 +509,7 @@ export function createRouter(context) {
   // The owner's numbers, aggregates only.
   function statsActions(chatId) {
     if (!isAdmin(chatId)) return [send(chatId, notAdmin())];
-    return [send(chatId, adminStats(collectStats(store.allUsers(), now(), isAdmin)))];
+    return [send(chatId, adminStats(collectStats(store.allUsers(), now(), isAdmin, store.meta.funnel, funnelDay())))];
   }
 
   function decide(chatId, targetId, approve) {
@@ -628,6 +759,8 @@ export function createRouter(context) {
   }
 
   function locked(chatId, state) {
+    if (atRisk(chatId)) return [send(chatId, lockedGentle())];
+    countFunnel("paywall");
     return [send(chatId, paywall(config.price, state), { reply_markup: buyKeyboard(config.price) })];
   }
 
@@ -637,7 +770,30 @@ export function createRouter(context) {
     startTrialFor(chatId);
     const state = access(chatId);
     const text = accessOffer(config.price, state);
-    return [state.kind === "pro" ? send(chatId, text) : send(chatId, text, { reply_markup: buyKeyboard(config.price) })];
+    if (state.kind === "pro") return [send(chatId, text)];
+    countFunnel("paywall");
+    return [send(chatId, text, { reply_markup: buyKeyboard(config.price) })];
+  }
+
+  // The greeting's buttons. Someone without a result yet also gets one
+  // obvious next step at the bottom, where the greeting ends.
+  function greetingKeyboard(chatId, unlocked) {
+    const keyboard = startKeyboard(unlocked);
+    if (store.user(chatId).results.length) return keyboard;
+    return { inline_keyboard: keyboard.inline_keyboard.concat(startCtaKeyboard().inline_keyboard) };
+  }
+
+  // Free text the bot was not waiting for: a simple intent, or the menu.
+  function freeTextActions(chatId, text, message) {
+    const intent = detectIntent(text);
+    if (intent === "greeting") {
+      const name = message && message.from && message.from.first_name;
+      return [send(chatId, shortGreeting(name), { reply_markup: startCtaKeyboard() })];
+    }
+    if (intent === "price" && !atRisk(chatId)) return accessActions(chatId);
+    if (intent === "test") return menuActions(chatId, "tests");
+    if (intent === "help") return handleCommand(chatId, { command: "contact", args: "" }, message);
+    return [send(chatId, friendlyUnknown(), { reply_markup: mainKeyboard(chatId) })];
   }
 
   // The menu under the input field. The main screen offers "⭐ Повний доступ"
@@ -714,6 +870,7 @@ export function createRouter(context) {
     const completedAt = now();
     const result = buildResult(instrument, session.answers, completedAt);
     const previous = store.lastResult(chatId, instrument.id);
+    if (!store.user(chatId).results.length) countFunnel("firstTest");
     const stored = store.addResult(chatId, result);
     const pending = sessions.expectNote(chatId, instrument.id, stored, now());
     const schedule = scheduleFor(chatId);
@@ -823,13 +980,14 @@ export function createRouter(context) {
         }
         if (!store.user(chatId).firstSeenAt) {
           store.updateUser(chatId, { firstSeenAt: new Date(now()).toISOString() });
+          countFunnel("start");
         }
         startTrialFor(chatId);
         const state = access(chatId);
         const hello = send(chatId,
           greeting(message && message.from && message.from.first_name, scheduleFor(chatId),
             { extra: trialNotice(state, config.price), remindersActive: state.active }),
-          { reply_markup: startKeyboard(state.active) });
+          { reply_markup: greetingKeyboard(chatId, state.active) });
         // The greeting keeps its inline shortcuts; the second message brings up
         // the menu under the input field, with "Мені зараз погано" in reach.
         return [hello].concat(menuActions(chatId, "main"));
@@ -983,6 +1141,7 @@ export function createRouter(context) {
       }
       const result = buildResult(instrument, payload.answers, now());
       const previous = store.lastResult(chatId, instrument.id);
+      if (!store.user(chatId).results.length) countFunnel("firstTest");
       const stored = store.addResult(chatId, result);
       if (payload.note) store.annotateResult(chatId, stored, payload.note);
       sessions.cancel(chatId);
@@ -1007,7 +1166,7 @@ export function createRouter(context) {
       const extra = entry.rating <= MOOD_LOW
         ? { reply_markup: { inline_keyboard: [[{ text: "Що можна зробити зараз", callback_data: "p|mood" }]] } }
         : {};
-      return { actions: [send(chatId, moodDone(entry, weekAverage(chatId)), extra)], payload };
+      return { actions: [send(chatId, moodDone(entry, weekAverage(chatId)), extra)].concat(moodSummaryActions(chatId)), payload };
     }
 
     if (payload.type === "report") {
@@ -1051,6 +1210,7 @@ export function createRouter(context) {
   function handleInvoice(chatId) {
     startTrialFor(chatId);
     if (access(chatId).kind === "pro") return [send(chatId, alreadyPro())];
+    countFunnel("invoice");
     return [{ method: "sendInvoice", payload: invoiceFor(chatId, config.price) }];
   }
 
@@ -1090,6 +1250,7 @@ export function createRouter(context) {
     const record = applyPayment(store, chatId, payment, now());
     if (!record) return [send(chatId, "Платіж отримано, але я не зміг його прочитати. Напишіть у /paysupport.")];
     if (record.duplicateChargeId) return [send(chatId, duplicatePurchase(record.duplicateChargeId))];
+    countFunnel("paid");
     const thanks = [send(chatId, purchaseThanks(config.price), { reply_markup: mainKeyboard(chatId) })];
     const url = appUrl(access(chatId), chatId);
     return url ? [menuButtonAction(chatId, url)].concat(thanks) : thanks;
@@ -1105,6 +1266,7 @@ export function createRouter(context) {
       return parsed ? [send(chatId, PRIVATE_ONLY)] : [];
     }
     noteAdmin(chatId, message.from);
+    noteActivity(chatId);
     if (message.successful_payment) return handleSuccessfulPayment(chatId, message.successful_payment);
     if (message.web_app_data) return handleWebAppData(chatId, message.web_app_data.data).actions;
     if (isSosText(text)) return sosActions(chatId);
@@ -1115,6 +1277,20 @@ export function createRouter(context) {
     if (parsed) return handleCommand(chatId, parsed, message);
     const draft = homeworkDraft(chatId);
     if (draft && text.trim()) return homeworkSave(chatId, draft, text);
+    // A crisis typed as text gets the help block first, whatever the bot was
+    // waiting for; the text itself still goes where it was going.
+    if (detectCrisis(text)) {
+      store.updateUser(chatId, { crisisAt: new Date(now()).toISOString() });
+      const rest = textActions(chatId, text, message, true);
+      return [sosBlock(chatId)].concat(rest);
+    }
+    return textActions(chatId, text, message, false);
+  }
+
+  // Text that is not a command or a button: an application, a booking
+  // request, a weekly note, a digit answer, or free text. After a crisis
+  // phrase the help block has already been sent, so free text adds nothing.
+  function textActions(chatId, text, message, afterCrisis) {
     const application = sessions.application(chatId, now());
     if (application) return applicationText(chatId, application, text);
     const booking = sessions.booking(chatId, now());
@@ -1136,8 +1312,8 @@ export function createRouter(context) {
     if (/^[0-4]$/.test(text.trim()) && sessions.get(chatId, now())) {
       return applyAnswer(chatId, Number(text.trim()), null).actions;
     }
-    if (!text) return [];
-    return [send(chatId, unknownInput())];
+    if (!text || afterCrisis) return [];
+    return freeTextActions(chatId, text, message);
   }
 
   function handleCallback(query) {
@@ -1148,6 +1324,7 @@ export function createRouter(context) {
     if (chatId === undefined || chatId === null) return [ack(query.id)];
     if (chat.type && chat.type !== "private") return [ack(query.id), send(chatId, PRIVATE_ONLY)];
     noteAdmin(chatId, query.from);
+    noteActivity(chatId);
 
     const answer = parseAnswerCallback(data);
     if (answer) {
@@ -1185,6 +1362,15 @@ export function createRouter(context) {
       if (parts[1] === "on") return [ack(query.id)].concat(handleRemind(chatId, "on"));
       return [ack(query.id), send(chatId, reminderLine(chatId))];
     }
+    if (parts[0] === "dm") {
+      const user = store.user(chatId);
+      const enabled = parts[1] === "on";
+      user.dailyMood = Object.assign({}, user.dailyMood, { offered: true, enabled, unanswered: 0 });
+      store.touch();
+      return [ack(query.id), send(chatId, dailyMoodSet(enabled))];
+    }
+    if (parts[0] === "acc") return [ack(query.id)].concat(accessActions(chatId));
+    if (parts[0] === "mn") return [ack(query.id)].concat(menuActions(chatId, parts[1] === "tests" ? "tests" : "main"));
     if (parts[0] === "pay") {
       return [ack(query.id)].concat(handleInvoice(chatId));
     }
@@ -1209,7 +1395,7 @@ export function createRouter(context) {
       const saved = message.message_id
         ? editText(chatId, message.message_id, moodSaved(entry), moodTagKeyboard(entry))
         : send(chatId, moodSaved(entry), { reply_markup: moodTagKeyboard(entry) });
-      return [ack(query.id, "Збережено"), saved];
+      return [ack(query.id, "Збережено"), saved].concat(moodSummaryActions(chatId));
     }
     if (parts[0] === "mt") {
       const entry = store.toggleMoodTag(chatId, parts[1], parts[2]);
@@ -1346,7 +1532,8 @@ export function createRouter(context) {
       const pending = sessions.pendingNote(chatId, now());
       if (!pending || pending.id !== parts[1]) return [ack(query.id)];
       sessions.clearNote(chatId);
-      return [ack(query.id), send(chatId, noteSkipped(), { reply_markup: startKeyboard(access(chatId).active) })];
+      return [ack(query.id), send(chatId, noteSkipped(), { reply_markup: startKeyboard(access(chatId).active) })]
+        ;
     }
     if (parts[0] === "del") {
       if (parts[1] === "yes") {
@@ -1374,6 +1561,6 @@ export function createRouter(context) {
 
   return {
     handleUpdate, handleMessage, handleCallback, handleWebAppData, handlePreCheckout,
-    reminderActions, access, instruments: INSTRUMENT_LIST,
+    reminderActions, habitActions, access, atRisk, instruments: INSTRUMENT_LIST,
   };
 }

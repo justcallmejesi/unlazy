@@ -142,7 +142,10 @@ export class BotRuntime {
     const due = dueReminders({
       // The weekly reminder is part of the paid access, so a lapsed chat is
       // filtered out before any slot is computed for it.
-      users: this.store.allUsers().filter((user) => entitlement(user, nowMs).active),
+      // Someone who left two daily reminders unanswered is not written to
+      // until they come back on their own.
+      users: this.store.allUsers().filter((user) => entitlement(user, nowMs).active &&
+        !(user.dailyMood && user.dailyMood.unanswered >= 2)),
       nowMs,
       defaults: this.config.reminder,
       graceMs: this.config.reminder.graceMs,
@@ -166,6 +169,9 @@ export class BotRuntime {
       }
     }
     if (reminded.length) log("weekly reminder sent to " + reminded.length + " chat(s)");
+    // The daily mood question and the trial notice; the router marks them sent.
+    const habits = this.router.habitActions ? this.router.habitActions() : [];
+    if (habits.length) await this.runActions(habits);
     return reminded;
   }
 

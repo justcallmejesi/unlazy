@@ -45,6 +45,49 @@ function defaultUser(chatId) {
     shares: [],
     // Homework from specialists, newest last.
     homework: [],
+    // A crisis phrase typed as text, ISO time. Like a marked PHQ-9 item 9, it
+    // keeps every unasked-for payment prompt away for a while.
+    crisisAt: null,
+    // The daily mood reminder: offered once after the first result, opt-in.
+    // `unanswered` counts reminders sent since the person last wrote; at two
+    // the bot falls silent until they come back on their own.
+    dailyMood: { offered: false, enabled: false, lastSentDate: null, unanswered: 0 },
+    // One-off nudges, ISO times, so each is sent at most once.
+    moodSummaryAt: null,
+    trialNoticeAt: null,
+    // Counted once in the "came back the next day" funnel step.
+    returnedCounted: false,
+  };
+}
+
+// The owner's funnel, counted per local day and never per person, so /delete
+// has nothing to take out of it. Kept for FUNNEL_KEEP_DAYS.
+export const FUNNEL_STEPS = ["start", "firstTest", "returned", "paywall", "invoice", "paid"];
+export const FUNNEL_KEEP_DAYS = 60;
+
+function normalizeFunnel(raw) {
+  const funnel = {};
+  if (!raw || typeof raw !== "object") return funnel;
+  Object.keys(raw).forEach((day) => {
+    if (!DATE_KEY.test(day) || !raw[day] || typeof raw[day] !== "object") return;
+    const counts = {};
+    FUNNEL_STEPS.forEach((step) => {
+      const value = raw[day][step];
+      if (Number.isInteger(value) && value > 0) counts[step] = value;
+    });
+    funnel[day] = counts;
+  });
+  return funnel;
+}
+
+function normalizeDailyMood(raw) {
+  const base = { offered: false, enabled: false, lastSentDate: null, unanswered: 0 };
+  if (!raw || typeof raw !== "object") return base;
+  return {
+    offered: raw.offered === true,
+    enabled: raw.enabled === true,
+    lastSentDate: typeof raw.lastSentDate === "string" && DATE_KEY.test(raw.lastSentDate) ? raw.lastSentDate : null,
+    unanswered: Number.isInteger(raw.unanswered) && raw.unanswered > 0 ? Math.min(raw.unanswered, 99) : 0,
   };
 }
 
@@ -165,6 +208,11 @@ function normalizeUser(chatId, raw) {
   user.homework = Array.isArray(raw.homework)
     ? raw.homework.map(normalizeHomework).filter(Boolean).slice(-MAX_HOMEWORK_PER_USER)
     : [];
+  user.crisisAt = isoOrNull(raw.crisisAt);
+  user.dailyMood = normalizeDailyMood(raw.dailyMood);
+  user.moodSummaryAt = isoOrNull(raw.moodSummaryAt);
+  user.trialNoticeAt = isoOrNull(raw.trialNoticeAt);
+  user.returnedCounted = raw.returnedCounted === true;
   return user;
 }
 
@@ -176,7 +224,7 @@ export class Store {
     this.users = new Map();
     this.offset = 0;
     // Bot-wide state that belongs to no single user.
-    this.meta = { adminChatId: null };
+    this.meta = { adminChatId: null, funnel: {} };
     this.dirty = false;
     this.timer = null;
     // Both limits are injectable so the ceiling behaviour is testable without
@@ -218,7 +266,10 @@ export class Store {
     }
     this.offset = Number.isFinite(parsed.offset) ? Number(parsed.offset) : 0;
     const meta = parsed.meta && typeof parsed.meta === "object" ? parsed.meta : {};
-    this.meta = { adminChatId: Number.isInteger(meta.adminChatId) ? meta.adminChatId : null };
+    this.meta = {
+      adminChatId: Number.isInteger(meta.adminChatId) ? meta.adminChatId : null,
+      funnel: normalizeFunnel(meta.funnel),
+    };
     const users = parsed.users && typeof parsed.users === "object" ? parsed.users : {};
     Object.keys(users).forEach((key) => {
       const chatId = Number(key);
@@ -251,6 +302,18 @@ export class Store {
     Object.assign(this.meta, patch);
     this.touch();
     return this.meta;
+  }
+
+  // One more event of a funnel step on a local day ("YYYY-MM-DD"). Days older
+  // than FUNNEL_KEEP_DAYS before it are dropped on the way.
+  countFunnel(day, step) {
+    if (!DATE_KEY.test(day) || FUNNEL_STEPS.indexOf(step) === -1) return;
+    const funnel = this.meta.funnel || (this.meta.funnel = {});
+    const counts = funnel[day] || (funnel[day] = {});
+    counts[step] = (counts[step] || 0) + 1;
+    const oldest = new Date(Date.parse(day + "T00:00:00Z") - FUNNEL_KEEP_DAYS * 86400000).toISOString().slice(0, 10);
+    Object.keys(funnel).forEach((key) => { if (key < oldest) delete funnel[key]; });
+    this.touch();
   }
 
   setOffset(offset) {

@@ -41,6 +41,7 @@ import { TelegramClient, TelegramError, clipText, encodeBody, escapeHtml } from 
 import { DEFAULT_CRISIS_CONTACT, loadConfig, parseEnvFile } from "../src/config.mjs";
 import { BotRuntime, buildBot } from "../bot.mjs";
 import { MAX_PAYLOAD_BYTES, parseStartCode, parseWebAppPayload } from "../src/webapp.mjs";
+import { detectCrisis, normalizeText } from "../src/crisis.mjs";
 import { SHARED, isCurrent, staleCopies } from "../webapp/build.mjs";
 import {
   ACCESS_BUTTON, COMMANDS, COMMAND_GROUPS, MENU_MAIN, MESSAGE_LIMIT, accessOffer, historyMessages, isAccessText,
@@ -857,6 +858,199 @@ test("homework: /cancel drops a draft, and only a specialist with access can sta
   assert.match(lastText(h.psy.say("просто текст")), /.+/);
   assert.equal(h.store.user(CLIENT).homework.length, 0);
   assert.doesNotMatch(lastText(h.client.tap("hw|" + PSY)), /Домашнє завдання для/);
+});
+
+// --------------------------------------------------------------- crisis text and free text
+
+const allMenuLabels = () => ["main", "tests", "results", "support", "settings", "psy"]
+  .map((id) => menuKeyboard(id, { offer: true, unlocked: false, admin: true, webappUrl: "https://example.pages.dev/" }))
+  .flatMap((keyboard) => keyboard.keyboard.flat().map((button) => button.text));
+
+const hasInvoice = (actions) => actions.some((action) => action.method === "sendInvoice");
+const hasPayButton = (actions) => actions.some((action) => action.payload && action.payload.reply_markup &&
+  JSON.stringify(action.payload.reply_markup).indexOf("pay|start") !== -1);
+
+test("crisis: strict phrases in Ukrainian and Russian are caught, neutral text and buttons are not", () => {
+  ["хочу померти", "Не хочу жити", "мне плохо", "Покінчити з собою", "ріжу себе", "убью себя", "Допоможіть!",
+    "мені погано спиться?", "МЕНІ ДУЖЕ ПОГАНО", "немає сенсу жити", "хочу умереть", "Помогите пожалуйста",
+    "думаю про суїцид", "вб'ю себе", "вбʼю себе"].forEach((text) => assert.equal(detectCrisis(text), true, text));
+  ["погода погана", "погано спав", "мені добре", "/start", "", "хороший день", "мені поганий фільм попався",
+    "суп з помідорів"].forEach((text) => assert.equal(detectCrisis(text), false, text));
+  allMenuLabels().forEach((label) => assert.equal(detectCrisis(label), false, label));
+  assert.equal(normalizeText("Мені  ПОГАНО!!"), "мени погано");
+});
+
+test("crisis: a typed phrase gets the SOS block with 103 and 7333 first and no payment", () => {
+  const h = harness({ config: { contact: BOOKING_CONTACT } });
+  h.say("/start");
+  const reply = h.say("я більше не хочу жити");
+  const text = textsOf(reply).join("\n");
+  assert.match(text, /7333/);
+  assert.ok(text.indexOf("103") < text.indexOf("Олексій"), "emergency services come before the personal contact");
+  assert.equal(hasInvoice(reply), false);
+  assert.equal(hasPayButton(reply), false);
+  assert.ok(h.store.user(777).crisisAt);
+  // Afterwards a locked feature and a price question show no price.
+  h.clock.now += 20 * DAY_MS;
+  const lockedReply = h.say("/results");
+  assert.equal(hasPayButton(lockedReply), false);
+  assert.doesNotMatch(textsOf(lockedReply).join("\n"), /зірок|Ціна/);
+  assert.doesNotMatch(textsOf(h.say("скільки коштує")).join("\n"), /Ціна/);
+});
+
+test("crisis: written as the weekly note, the note is kept and the help block still comes", () => {
+  const h = harness();
+  h.say("/start");
+  completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
+  const reply = h.say("цей тиждень жахливий, мені погано");
+  assert.match(textsOf(reply)[0], /7333/);
+  assert.match(textsOf(reply).join("\n"), /опис збережено/i);
+  assert.equal(h.store.lastResult(777, "gad7").note, "цей тиждень жахливий, мені погано");
+  assert.equal(hasInvoice(reply), false);
+});
+
+test("crisis: inside a booking request the text still lands after the help block", () => {
+  const h = harness({ config: { contact: BOOKING_CONTACT } });
+  h.say("/start");
+  h.say("/book");
+  h.tap("b|f|online");
+  h.tap("b|t|evening");
+  const reply = h.say("мне плохо, хочу поговорить");
+  assert.match(textsOf(reply)[0], /7333/);
+  assert.ok(textsOf(reply).length > 1, "the booking goes on");
+});
+
+test("free text: greetings, price, tests and help are understood, anything else gets the menu", () => {
+  const h = harness({ config: { contact: BOOKING_CONTACT } });
+  h.say("/start");
+  const hello = h.say("Привіт");
+  assert.deepEqual(hello[0].payload.reply_markup.inline_keyboard.map((row) => row[0].callback_data), ["s|gad7", "mn|tests"]);
+  assert.match(lastText(h.say("скільки коштує?")), /Що відкривається/);
+  assert.match(lastText(h.say("хочу пройти тест")), /Оберіть тест/);
+  assert.match(textsOf(h.say("потрібен психолог")).join("\n"), /Олексій/);
+  const other = h.say("абракадабра");
+  assert.match(lastText(other), /не розумію довільний текст/);
+  const rows = menuOf(other);
+  assert.deepEqual(rows[rows.length - 1], [{ text: "🆘 Мені зараз погано" }]);
+  assert.equal(h.tap("mn|tests").some((action) => /Оберіть тест/.test(action.payload.text || "")), true);
+});
+
+test("start: a newcomer gets a two-minute test button under the greeting, a returning user does not", () => {
+  const h = harness();
+  const greeting = h.say("/start")[0].payload.reply_markup.inline_keyboard;
+  assert.deepEqual(greeting[greeting.length - 2].map((button) => button.callback_data), ["s|gad7"]);
+  assert.match(greeting[greeting.length - 2][0].text, /Пройти тест за 2 хвилини/);
+  assert.deepEqual(greeting[greeting.length - 1].map((button) => button.callback_data), ["mn|tests"]);
+  completeViaKeyboard(h, GAD7, [0, 0, 0, 0, 0, 0, 0]);
+  const again = h.say("/start")[0].payload.reply_markup.inline_keyboard;
+  assert.equal(JSON.stringify(again).indexOf("mn|tests"), -1);
+});
+
+// --------------------------------------------------------------- habits
+
+// 20:05 Kyiv (UTC+3 in the fixture) on the fixture's Wednesday.
+const WED_2005_KYIV = Date.parse("2026-09-16T17:05:00Z");
+
+test("habits: the daily mood reminder is offered after the first result, then asked at 20:00", () => {
+  const h = harness();
+  h.say("/start");
+  completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
+  assert.deepEqual(h.router.habitActions(), [], "not right after the result");
+  h.clock.now += 15 * 60000;
+  const offer = h.router.habitActions();
+  assert.match(offer[0].payload.text, /Нагадувати щодня о 20:00/);
+  assert.deepEqual(h.router.habitActions(), [], "offered once");
+  h.tap("dm|on");
+  h.clock.now = WED_2005_KYIV;
+  const asked = h.router.habitActions();
+  assert.match(asked[0].payload.text, /Як настрій сьогодні/);
+  assert.deepEqual(h.router.habitActions(), [], "once a day");
+  // Two unanswered days and the bot falls silent until the person writes.
+  h.clock.now += DAY_MS;
+  assert.equal(h.router.habitActions().length, 1);
+  h.clock.now += DAY_MS;
+  assert.deepEqual(h.router.habitActions(), [], "quiet after two unanswered reminders");
+  h.say("/menu");
+  h.clock.now += DAY_MS;
+  assert.equal(h.router.habitActions().length, 1, "back after the person came back");
+});
+
+test("habits: three check-ins in a week bring one short summary", () => {
+  const h = harness();
+  h.say("/start");
+  h.tap("m|5");
+  h.clock.now += DAY_MS;
+  h.tap("m|8");
+  h.clock.now += DAY_MS;
+  const third = h.tap("m|6");
+  const summary = textsOf(third).find((text) => /Підсумок тижня/.test(text));
+  assert.ok(summary);
+  assert.match(summary, /середній настрій 6,3/);
+  assert.match(summary, /\(8\)/);
+  h.clock.now += DAY_MS;
+  assert.equal(textsOf(h.tap("m|7")).some((text) => /Підсумок тижня/.test(text)), false, "once a week");
+});
+
+test("habits: the day before the trial ends one notice says what closes and what stays free", () => {
+  const h = harness();
+  h.say("/start");
+  h.clock.now += 5 * DAY_MS + 60 * 60000;
+  const notice = h.router.habitActions().filter((action) => /закінчується безкоштовний період/.test(action.payload.text || ""));
+  assert.equal(notice.length, 1);
+  assert.match(notice[0].payload.text, /Назавжди безкоштовно/);
+  assert.equal(notice[0].payload.reply_markup.inline_keyboard[0][0].callback_data, "acc|show");
+  assert.deepEqual(h.router.habitActions().filter((action) => /закінчується/.test(action.payload.text || "")), []);
+
+  const risky = harness();
+  risky.say("/start");
+  completeViaKeyboard(risky, PHQ9, [1, 1, 1, 1, 1, 1, 1, 1, 2, 1]);
+  risky.clock.now += 5 * DAY_MS + 60 * 60000;
+  assert.equal(risky.router.habitActions().some((action) => /закінчується/.test(action.payload.text || "")), false,
+    "never to someone who marked item 9");
+});
+
+test("risk: after a marked item 9 a locked feature shows what is free, not a price", () => {
+  const h = harness();
+  h.say("/start");
+  completeViaKeyboard(h, PHQ9, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+  h.clock.now += 10 * DAY_MS;
+  const reply = h.say("/sleep");
+  assert.equal(hasPayButton(reply), false);
+  assert.match(lastText(reply), /Безкоштовно і назавжди/);
+  // Their own explicit choice still opens the offer.
+  assert.equal(hasPayButton(h.say("/buy")), true);
+});
+
+// --------------------------------------------------------------- funnel
+
+test("funnel: day counters for the owner, nothing per person, and /delete leaves no trace", () => {
+  const h = psyHarness();
+  h.owner.say("/start");
+  h.client.say("/start");
+  h.client.say("/gad7");
+  for (let index = 0; index < 7; index++) {
+    const session = h.sessions.get(CLIENT, h.clock.now);
+    h.client.tap(["a", session.id, index, 0].join("|"));
+  }
+  h.clock.now += DAY_MS;
+  h.client.say("/menu");
+  h.client.say("/buy");
+  h.client.tap("pay|start");
+  h.client.pay({ currency: "XTR", total_amount: 100, invoice_payload: invoiceFor(CLIENT, h.config.price).payload,
+    telegram_payment_charge_id: "ch_f" });
+  const stats = textsOf(h.owner.say("/stats")).join("\n");
+  assert.match(stats, /Воронка/);
+  assert.match(stats, /Натиснули \/start уперше: 2 \/ 2/);
+  assert.match(stats, /Пройшли перший тест: 1 \/ 1/);
+  // The owner asking for /stats on the next day came back too.
+  assert.match(stats, /Повернулися наступного дня: 2 \/ 2/);
+  assert.match(stats, /Отримали рахунок: 1 \/ 1/);
+  assert.match(stats, /Оплатили повний доступ: 1 \/ 1/);
+  assert.doesNotMatch(stats, /Оля/);
+  assert.doesNotMatch(JSON.stringify(h.store.meta.funnel), /777|Оля/);
+  h.client.say("/delete");
+  h.client.tap("del|yes");
+  assert.equal(h.store.hasUser(CLIENT), false);
 });
 
 test("psy: the state follows approval, subscription and the owner's free access", () => {
@@ -1781,13 +1975,13 @@ test("router: a bare digit answers the current question and an out-of-range one 
   // 4 is a valid answer on the 0 to 4 scales, so on a 0 to 3 item it is named
   // as out of range rather than treated as unknown text.
   assert.match(lastText(h.say("4")), /від 0 до 3/);
-  assert.match(lastText(h.say("5")), /Не зрозумів команду/);
+  assert.match(lastText(h.say("5")), /не розумію довільний текст/);
   assert.equal(h.sessions.get(777, h.clock.now).answers.length, 1);
 });
 
 test("router: a digit outside a session is a hint, not an answer", () => {
   const h = harness();
-  assert.match(lastText(h.say("2")), /Не зрозумів команду/);
+  assert.match(lastText(h.say("2")), /не розумію довільний текст/);
   assert.equal(h.store.history(777).length, 0);
 });
 
@@ -1843,7 +2037,7 @@ test("note: the open question follows the score and the answer is attached to it
   assert.equal(h.store.lastResult(777, "gad7").note, "Важкий тиждень, погано спав і багато дедлайнів");
   assert.equal(h.sessions.pendingNoteCount(), 0);
   // Ordinary text after the prompt is answered is a hint again.
-  assert.match(lastText(h.say("ще щось")), /Не зрозумів команду/);
+  assert.match(lastText(h.say("ще щось")), /не розумію довільний текст/);
   assert.equal(h.store.lastResult(777, "gad7").note, "Важкий тиждень, погано спав і багато дедлайнів");
 });
 
@@ -1935,7 +2129,7 @@ test("note: the prompt expires with the session idle timeout", () => {
   const h = harness({ config: { sessionIdleTimeoutMs: 1000 } });
   completeViaKeyboard(h, GAD7, [1, 1, 1, 1, 1, 1, 1]);
   h.clock.now += 2000;
-  assert.match(lastText(h.say("пізній опис")), /Не зрозумів команду/);
+  assert.match(lastText(h.say("пізній опис")), /не розумію довільний текст/);
   assert.equal(h.store.lastResult(777, "gad7").note, undefined);
 });
 

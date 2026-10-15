@@ -68,6 +68,22 @@ sprite sheets and keyed out. Images are welcome only from a model that follows
 the prompt (keyless Pollinations returned an unrelated, sexualized picture and
 is not used).
 
+Crisis typed as text (`src/crisis.mjs`, `detectCrisis`): Ukrainian and
+Russian phrases on a normalized text get the same block as "Мені зараз
+погано", before a note, booking or application takes the text, which still
+lands. For 30 days after such a phrase or a marked PHQ-9 item 9 (`atRisk` in
+the router) the bot shows no unasked-for price, pay button or trial notice;
+`/buy` and "⭐ Повний доступ" still answer. Free text otherwise gets simple
+intents or the menu, never "Не зрозумів команду".
+
+Unasked messages besides the weekly reminder come from `habitActions` in the
+router: the one-time daily mood offer, the 20:00 daily mood question, the
+trial notice the day before it ends. Two unanswered daily questions silence
+all of them, the weekly reminder included, until the person writes. The
+owner's funnel is day counters in `store.meta.funnel`, never per person.
+`npm run swarm` (`telegram-bot/tests/swarm.mjs`) must end with "no
+violations".
+
 The Mini App opened from the menu button cannot call `sendData`. It then opens
 `t.me/<bot>?start=<code>` instead, and `parseStartCode` in `webapp.mjs` turns
 the code back into the same payload, validated the same way.

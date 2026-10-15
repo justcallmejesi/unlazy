@@ -6,6 +6,7 @@
 import { STAR_REWARD_USD, entitlement } from "./billing.mjs";
 import { INSTRUMENT_LIST } from "./instruments.mjs";
 import { psyState } from "./psy.mjs";
+import { FUNNEL_STEPS } from "./store.mjs";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -23,8 +24,23 @@ function lastActivity(user) {
   return latest;
 }
 
+// The funnel counters of the last `days` local days up to `today`, summed.
+export function funnelTotals(funnel, today, days) {
+  const totals = {};
+  FUNNEL_STEPS.forEach((step) => { totals[step] = 0; });
+  const end = Date.parse(today + "T00:00:00Z");
+  if (!funnel || !Number.isFinite(end)) return totals;
+  const first = new Date(end - (days - 1) * DAY_MS).toISOString().slice(0, 10);
+  Object.keys(funnel).forEach((day) => {
+    if (day < first || day > today) return;
+    FUNNEL_STEPS.forEach((step) => { totals[step] += funnel[day][step] || 0; });
+  });
+  return totals;
+}
+
 // `isAdmin(chatId)` keeps the owner's free cabinet out of the subscriptions.
-export function collectStats(users, nowMs, isAdmin) {
+// `funnel` and `today` are the store's day counters and the owner's local day.
+export function collectStats(users, nowMs, isAdmin, funnel, today) {
   const within = (ms, days) => ms > 0 && ms > nowMs - days * DAY_MS;
   const stats = {
     users: users.length, new7: 0, new30: 0, active7: 0, active30: 0,
@@ -66,6 +82,8 @@ export function collectStats(users, nowMs, isAdmin) {
     }
     if (user.shares.some((share) => !share.revokedAt)) stats.clients += 1;
   });
+  stats.funnel7 = funnelTotals(funnel, today, 7);
+  stats.funnel30 = funnelTotals(funnel, today, 30);
   stats.proUsd = stats.proStars * STAR_REWARD_USD;
   stats.psyMonthlyUsd = stats.psyMonthlyStars * STAR_REWARD_USD;
   return stats;
